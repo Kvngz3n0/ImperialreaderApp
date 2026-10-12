@@ -95,10 +95,34 @@ object Archives {
         ctx.contentResolver.openInputStream(doc.uri) ?: throw IOException("Cannot open ${doc.name}")
 
     private fun withRar(ctx: Context, doc: DocumentFile, block: (Archive) -> Unit) {
+        val staged = createStagingFile(ctx, doc)
         try {
-            openStream(ctx, doc).use { raw -> Archive(raw).use { block(it) } }
+            // Junrar's InputStream adapter retains read blocks for random access. Stage to disk and
+            // use its file-backed reader so large CBR files do not grow with the archive in heap.
+            openStream(ctx, doc).use { input ->
+                staged.outputStream().buffered().use { output -> input.copyTo(output, 64 * 1024) }
+            }
+            Archive(staged).use(block)
         } catch (e: com.github.junrar.exception.RarException) {
             throw IOException("Can't read this RAR file (${e.message}). Re-save it as CBZ and rescan.")
+        } finally {
+            staged.delete()
         }
+    }
+
+    private fun createStagingFile(ctx: Context, doc: DocumentFile): File {
+        var lastFailure: Exception? = null
+        for (cacheRoot in listOfNotNull(ctx.externalCacheDir, ctx.cacheDir).distinct()) {
+            try {
+                val stagingDir = File(cacheRoot, "rar-staging")
+                if (!stagingDir.exists() && !stagingDir.mkdirs()) {
+                    throw IOException("Cannot create temporary directory")
+                }
+                return File.createTempFile("archive-", ".rar", stagingDir)
+            } catch (e: Exception) {
+                lastFailure = e
+            }
+        }
+        throw IOException("Cannot create temporary space for ${doc.name}", lastFailure)
     }
 }

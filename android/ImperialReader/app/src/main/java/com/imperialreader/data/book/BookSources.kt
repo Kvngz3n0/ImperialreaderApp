@@ -316,6 +316,122 @@ class NovelPhoenixSource : BookSource {
     }
 }
 
+/** NovelFire has a distinct search route, book URL shape, and paginated chapter index. */
+class NovelFireSource : BookSource {
+    override val id = "novel_novelfire_net"
+    override val name = "NovelFire"
+    override val description = "Web novel • paginated chapters"
+    override val isWebNovel = true
+    private val base = "https://novelfire.net"
+
+    override suspend fun popular(page: Int): List<BookItem> =
+        if (page == 1) parseNovels("$base/ranking") else emptyList()
+
+    override suspend fun search(query: String, page: Int): List<BookItem> =
+        parseNovels("$base/search?keyword=${enc(query)}&page=$page")
+
+    private suspend fun parseNovels(url: String): List<BookItem> {
+        val doc = Jsoup.parse(fetchHtml(url), url)
+        return doc.select("a[href]").asSequence()
+            .mapNotNull { a ->
+                val href = bookUrl(a.absUrl("href")) ?: return@mapNotNull null
+                val img = a.selectFirst("img") ?: return@mapNotNull null
+                val title = a.selectFirst(".novel-title")?.text()?.trim()?.ifBlank { null }
+                    ?: a.attr("title").trim().ifBlank { img.attr("alt").trim() }
+                if (title.isBlank()) return@mapNotNull null
+                BookItem(
+                    sourceId = id,
+                    sourceName = name,
+                    id = href,
+                    title = title,
+                    author = null,
+                    coverUrl = lazyImage(img),
+                    epubUrl = null
+                )
+            }
+            .distinctBy { it.id }
+            .toList()
+    }
+
+    override suspend fun chapters(item: BookItem): List<NovelChapter> {
+        val book = bookUrl(item.id) ?: throw IOException("Invalid NovelFire title address")
+        val firstUrl = "$book/chapters?page=1"
+        val firstPage = fetchDoc(firstUrl)
+        val lastPage = chapterIndexPageCount(firstPage)
+        if (lastPage > MAX_CHAPTER_INDEX_PAGES) {
+            throw IOException("NovelFire chapter list is too large to load safely ($lastPage pages)")
+        }
+        val semaphore = Semaphore(4)
+        val otherPages = coroutineScope {
+            (2..lastPage).map { page ->
+                async {
+                    semaphore.withPermit {
+                        fetchDoc("$book/chapters?page=$page")
+                    }
+                }
+            }.awaitAll()
+        }
+        val chapters = (listOf(firstPage) + otherPages)
+            .flatMap(::parseChapters)
+            .distinctBy { it.url }
+        if (chapters.isEmpty()) throw IOException("NovelFire returned no chapters for this title")
+        return chapters
+    }
+
+    private fun chapterIndexPageCount(doc: Document): Int =
+        doc.select(".pagination a[href], .pagedlist a[href]")
+            .asSequence()
+            .mapNotNull { Uri.parse(it.absUrl("href")).getQueryParameter("page")?.toIntOrNull() }
+            .maxOrNull()
+            ?.coerceAtLeast(1)
+            ?: 1
+
+    private fun parseChapters(doc: Document): List<NovelChapter> =
+        doc.select(".chapter-list a[href]").asSequence()
+            .mapNotNull { a ->
+                val url = a.absUrl("href")
+                val uri = Uri.parse(url)
+                if (uri.host?.removePrefix("www.")?.equals("novelfire.net", true) != true ||
+                    !uri.path.orEmpty().matches(Regex("""^/book/[^/]+/chapter-[^/]+/?$""", RegexOption.IGNORE_CASE))
+                ) return@mapNotNull null
+                val title = a.selectFirst(".chapter-title")?.text()?.trim()?.ifBlank { null }
+                    ?: a.attr("title").trim().ifBlank { a.text().trim() }
+                if (title.isBlank()) null else NovelChapter(title, url)
+            }
+            .toList()
+
+    override suspend fun chapterHtml(chapter: NovelChapter): String {
+        val uri = Uri.parse(chapter.url)
+        if (uri.host?.removePrefix("www.")?.equals("novelfire.net", true) != true ||
+            !uri.path.orEmpty().matches(Regex("""^/book/[^/]+/chapter-[^/]+/?$""", RegexOption.IGNORE_CASE))
+        ) throw IOException("Invalid NovelFire chapter address")
+
+        val doc = fetchDoc(chapter.url)
+        val content = doc.selectFirst("#content")
+            ?: throw IOException("NovelFire chapter text was not found")
+        content.select("script, style, noscript, iframe, nav, header, footer, aside, form, .nf-ads, [class*=advert], [id*=advert]")
+            .remove()
+        if (content.select("p").none { it.text().isNotBlank() }) {
+            throw IOException("NovelFire returned an empty chapter")
+        }
+        return content.html()
+    }
+
+    private suspend fun fetchDoc(url: String): Document = Jsoup.parse(fetchHtml(url), url)
+
+    private fun bookUrl(raw: String): String? {
+        val uri = Uri.parse(raw)
+        if (uri.host?.removePrefix("www.")?.equals("novelfire.net", true) != true) return null
+        val path = uri.path.orEmpty().trimEnd('/')
+        if (!path.matches(Regex("""^/book/[^/]+$""", RegexOption.IGNORE_CASE))) return null
+        return "$base$path"
+    }
+
+    private companion object {
+        const val MAX_CHAPTER_INDEX_PAGES = 300
+    }
+}
+
 /** Any other web-novel site, read with the pattern-based scraper (best effort; some sites need a browser). */
 class WebNovelSource(
     override val id: String,
@@ -366,8 +482,11 @@ object BookSources {
     val all: List<BookSource> =
         listOf(GutenbergSource(), InternetArchiveSource(), RoyalRoadSource()) +
             novelSites.map { (name, url) ->
-                if (hostId(url, name) == "novelphoenix_com") NovelPhoenixSource()
-                else WebNovelSource("novel_" + hostId(url, name), name, url)
+                when (hostId(url, name)) {
+                    "novelphoenix_com" -> NovelPhoenixSource()
+                    "novelfire_net" -> NovelFireSource()
+                    else -> WebNovelSource("novel_" + hostId(url, name), name, url)
+                }
             }
     fun get(id: String): BookSource? = all.firstOrNull { it.id == id }
 }

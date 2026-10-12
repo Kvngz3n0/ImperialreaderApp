@@ -18,6 +18,7 @@ class SourceManager(private val context: Context) {
         NhentaiXxxSource(),
         NineHentaiSource(),
         XoxoComicSource(),
+        ComicHubFreeSource(),
         // Confirmed against the live site: WordPress + MangaThemesia (/manga/?order=update, chapters at /<slug>-chapter-N/)
         MangaThemesiaSource("KingOfShojo", "https://kingofshojo.com"),
         WordPressSource("Toonily", "https://toonily.com", nsfw = true),

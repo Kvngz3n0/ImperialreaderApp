@@ -1,1 +1,2 @@
 - [Imperial Reader change scope](imperial-reader-scope.md) — Preserve working features and UI; limit changes to the requested behavior.
+- [Large CBR archives](large-cbr-archives.md) — Use Junrar’s file-backed reader; its stream reader retains random-access blocks in heap.

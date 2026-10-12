@@ -418,6 +418,140 @@ class XoxoComicSource : HttpSource() {
     }
 }
 
+/** ComicHubFree serves traditional Western comic series and a full-page reader for each issue. */
+class ComicHubFreeSource : HttpSource() {
+    override val id = "comichubfree_com"
+    override val name = "ComicHubFree"
+    override val lang = "en"
+    override val baseUrl = "https://comichubfree.com"
+
+    override suspend fun getPopular(page: Int): MangasPage =
+        if (page <= 1) list(baseUrl) else list("$baseUrl/comic-list?page=$page")
+
+    override suspend fun getLatest(page: Int): MangasPage = getPopular(page)
+
+    override suspend fun search(query: String, page: Int): MangasPage =
+        list("$baseUrl/search-comic?key=${enc(query)}&page=$page")
+
+    private suspend fun list(url: String): MangasPage {
+        val doc = Jsoup.parse(getString(url), url)
+        val items = doc.select("a[href]").asSequence()
+            .mapNotNull { a ->
+                val href = a.absUrl("href")
+                val path = comicPath(href)
+                if (path == null || !path.matches(Regex("""^/comic/[^/]+/?$""", RegexOption.IGNORE_CASE))) {
+                    return@mapNotNull null
+                }
+                val img = a.selectFirst("img")
+                val title = a.attr("title").trim()
+                    .ifBlank { img?.attr("alt").orEmpty().trim() }
+                    .ifBlank { a.text().trim() }
+                    .removePrefix("Read ")
+                    .removeSuffix(" online")
+                    .removeSuffix(" Comic")
+                    .trim()
+                if (title.isBlank()) return@mapNotNull null
+                SManga(url = href.trimEnd('/'), title = title, thumbnailUrl = imageUrl(img))
+            }
+            .distinctBy { it.url }
+            .toList()
+        return MangasPage(items, items.isNotEmpty())
+    }
+
+    override suspend fun getMangaDetails(manga: SManga): SManga {
+        val doc = Jsoup.parse(getString(manga.url), manga.url)
+        manga.title = doc.selectFirst("main h1, h1")?.text()?.trim()
+            ?.removePrefix("Read ")?.removeSuffix(" Online for Free")?.trim()?.ifBlank { null }
+            ?: manga.title
+        manga.thumbnailUrl = doc.selectFirst("meta[property=og:image]")?.attr("content")?.ifBlank { null }
+            ?: doc.selectFirst("main img[alt*=cover]")?.let(::imageUrl)
+            ?: manga.thumbnailUrl
+        manga.description = doc.selectFirst("meta[property=og:description], meta[name=description]")
+            ?.attr("content")?.trim()?.ifBlank { null } ?: manga.description
+        return manga
+    }
+
+    override suspend fun getChapters(manga: SManga): List<SChapter> {
+        val seriesPath = comicPath(manga.url)
+            ?.takeIf { it.matches(Regex("""^/comic/[^/]+/?$""", RegexOption.IGNORE_CASE)) }
+            ?: throw IOException("Invalid ComicHubFree series address")
+        val seriesUrl = "$baseUrl${seriesPath.trimEnd('/')}"
+        val firstPage = Jsoup.parse(getString(seriesUrl), seriesUrl)
+        val lastPage = issueListPageCount(firstPage)
+        if (lastPage > MAX_ISSUE_LIST_PAGES) {
+            throw IOException("ComicHubFree issue list is too large to load safely ($lastPage pages)")
+        }
+        val slug = seriesPath.trimEnd('/').substringAfterLast('/')
+        val semaphore = Semaphore(4)
+        val otherPages = coroutineScope {
+            (2..lastPage).map { page ->
+                async {
+                    semaphore.withPermit {
+                        val url = "$seriesUrl?page=$page"
+                        Jsoup.parse(getString(url), url)
+                    }
+                }
+            }.awaitAll()
+        }
+        val issues = (listOf(firstPage) + otherPages)
+            .flatMap { parseIssues(it, slug) }
+            .distinctBy { it.url }
+        if (issues.isEmpty()) throw IOException("ComicHubFree returned no issues for this series")
+        return issues.sortedWith(
+            compareByDescending<SChapter> { it.chapterNumber >= 0f }
+                .thenByDescending { it.chapterNumber }
+        )
+    }
+
+    private fun issueListPageCount(doc: Document): Int =
+        doc.select(".pagination a[href]")
+            .asSequence()
+            .mapNotNull { Regex("""[?&]page=(\d+)""").find(it.absUrl("href"))?.groupValues?.get(1)?.toIntOrNull() }
+            .maxOrNull()
+            ?.coerceAtLeast(1)
+            ?: 1
+
+    private fun parseIssues(doc: Document, slug: String): List<SChapter> =
+        doc.select("a[href]").asSequence()
+            .mapNotNull { a ->
+                val url = a.absUrl("href")
+                val path = comicPath(url) ?: return@mapNotNull null
+                val match = Regex("""^/${Regex.escape(slug)}/issue-([^/]+)/?$""", RegexOption.IGNORE_CASE).matchEntire(path)
+                    ?: return@mapNotNull null
+                val issueNumber = match.groupValues[1]
+                val rawTitle = a.attr("title").trim().ifBlank { a.text().trim() }
+                val title = rawTitle.takeIf { Regex("""(?i)(issue|#)\s*#?\s*[\d.]+""").containsMatchIn(it) }
+                    ?: "$slug Issue #$issueNumber"
+                SChapter(url.trimEnd('/'), title, chapterNumber = issueNumber.toFloatOrNull() ?: -1f)
+            }
+            .toList()
+
+    override suspend fun getPages(chapter: SChapter): List<String> {
+        val path = comicPath(chapter.url)
+            ?.takeIf { Regex("""^/[^/]+/issue-[^/]+/?$""", RegexOption.IGNORE_CASE).matches(it) }
+            ?: throw IOException("Invalid ComicHubFree issue address")
+        val allUrl = "$baseUrl${path.trimEnd('/')}/all"
+        val doc = Jsoup.parse(getString(allUrl), allUrl)
+        val pages = doc.select("#imgChapter img.chapter_img, .chapter-container img.chapter_img")
+            .mapNotNull(::imageUrl)
+            .distinct()
+        if (pages.isEmpty()) throw IOException("ComicHubFree returned no pages for this issue")
+        return pages
+    }
+
+    private fun comicPath(url: String): String? {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        val host = uri.host?.removePrefix("www.") ?: return null
+        val expectedHost = URI(baseUrl).host?.removePrefix("www.") ?: return null
+        if (!host.equals(expectedHost, ignoreCase = true)) return null
+        return uri.path
+    }
+
+    private companion object {
+        const val MAX_ISSUE_LIST_PAGES = 250
+    }
+}
+
 private fun imageUrl(img: Element?): String? {
     if (img == null) return null
     for (attribute in listOf("data-src", "data-lazy-src", "data-original", "src")) {
