@@ -305,16 +305,14 @@ class XoxoComicSource : HttpSource() {
     private suspend fun list(url: String): MangasPage {
         val doc = Jsoup.parse(getString(url), url)
         val items = doc.select("a[href]").asSequence()
-            .filter {
-                it.attr("href").startsWith("/comic/") &&
-                    it.selectFirst("img") != null &&
-                    !it.attr("href").contains("/issue-")
-            }
+            .filter { a -> comicPath(a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) })?.matches(Regex("""^/comic/[^/]+/?$""")) == true }
             .mapNotNull { a ->
-                val href = a.absUrl("href")
-                val title = a.attr("title").ifBlank { a.selectFirst("img")?.attr("alt").orEmpty() }
+                val href = a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) }.trimEnd('/')
+                val title = a.attr("title").ifBlank {
+                    a.selectFirst("img")?.attr("alt").orEmpty().ifBlank { a.text() }
+                }
                     .removeSuffix(" Comic").trim()
-                if (title.isBlank() || !href.startsWith("$baseUrl/comic/")) return@mapNotNull null
+                if (title.isBlank()) return@mapNotNull null
                 SManga(url = href, title = title, thumbnailUrl = imageUrl(a.selectFirst("img")))
             }.distinctBy { it.url }.toList()
         return MangasPage(items, items.isNotEmpty())
@@ -334,10 +332,14 @@ class XoxoComicSource : HttpSource() {
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val doc = Jsoup.parse(getString(manga.url), manga.url)
         val rows = doc.select("a[href]").asSequence()
-            .filter { it.attr("href").contains("/issue-") }
+            .filter { a ->
+                val path = comicPath(a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) })
+                path != null && Regex("""^/comic/[^/]+/(?:issue-[^/]+|tpb)/?$""", RegexOption.IGNORE_CASE).matches(path)
+            }
             .mapNotNull { a ->
-                val url = a.absUrl("href").takeIf { it.startsWith("$baseUrl/comic/") } ?: return@mapNotNull null
-                val name = a.text().trim().ifBlank { a.attr("title").trim() }.ifBlank { "Issue" }
+                val url = a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) }.trimEnd('/')
+                val name = a.text().trim().ifBlank { a.attr("title").trim() }
+                    .ifBlank { url.substringAfterLast('/').replace('-', ' ').replaceFirstChar { it.uppercase() } }
                 val number = Regex("""(?i)(?:issue|#)[\s-]*(\d+(?:\.\d+)?)""").find(name)
                     ?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
                 SChapter(url, name, chapterNumber = number)
@@ -350,23 +352,69 @@ class XoxoComicSource : HttpSource() {
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {
-        val html = getString(chapter.url)
-        val doc = Jsoup.parse(html, chapter.url)
-        val images = doc.select("#imgChapter img, .page-chapter img, .reading img, .reader img")
-            .mapNotNull(::imageUrl)
-            .filterNot { it.contains("logo", true) || it.contains("loading", true) || it.contains("avatar", true) }
-            .distinct()
-        if (images.isNotEmpty()) return images
+        val chapterPath = comicPath(chapter.url)
+            ?: throw IOException("Invalid XOXO Comic issue address")
+        val pages = mutableListOf<String>()
+        val visited = mutableSetOf<String>()
+        var pageUrl: String? = chapter.url
 
-        // Some XOXO reader templates put their page URLs in inline scripts instead of image tags.
-        val embedded = Regex("""https?:\\?/\\?/[^\"'\s\\]+?\.(?:jpe?g|png|webp|avif)(?:\?[^\"'\s\\]*)?""", RegexOption.IGNORE_CASE)
-            .findAll(html)
-            .map { it.value.replace("\\/", "/") }
-            .filterNot { it.contains("logo", true) || it.contains("loading", true) || it.contains("avatar", true) }
-            .distinct()
-            .toList()
-        if (embedded.isNotEmpty()) return embedded
-        throw IOException("XOXO Comic returned the issue page without reader images; try opening the source in WebView to clear any site challenge")
+        // XOXO serves one image per reader URL and links pages with rel=next. Follow those links so
+        // opening or downloading an issue gets the complete issue, not just page one.
+        while (pageUrl != null) {
+            if (!visited.add(pageUrl)) break
+            if (visited.size > MAX_ISSUE_PAGES) {
+                throw IOException("XOXO Comic issue exceeded the $MAX_ISSUE_PAGES-page safety limit")
+            }
+
+            val html = getString(pageUrl)
+            val doc = Jsoup.parse(html, pageUrl)
+            val pageImages = doc.select("img#imgChapter, #imgChapter img, .reading-detail .page-chapter img, .page-chapter img, .reading img, .reader img")
+                .asSequence()
+                .mapNotNull(::imageUrl)
+                .filterNot { it.contains("logo", true) || it.contains("loading", true) || it.contains("avatar", true) }
+                .distinct()
+                .toList()
+            val resolvedImages = if (pageImages.isNotEmpty()) pageImages else {
+                // Some XOXO reader templates put their page URLs in inline scripts instead of image tags.
+                Regex("""https?:\\?/\\?/[^\"'\s\\]+?\.(?:jpe?g|png|webp|avif)(?:\?[^\"'\s\\]*)?""", RegexOption.IGNORE_CASE)
+                    .findAll(html)
+                    .map { it.value.replace("\\/", "/") }
+                    .filterNot { it.contains("logo", true) || it.contains("loading", true) || it.contains("avatar", true) }
+                    .distinct()
+                    .toList()
+            }
+            if (resolvedImages.isEmpty()) {
+                throw IOException("XOXO Comic returned no reader image for issue page ${visited.size}")
+            }
+            pages += resolvedImages
+
+            val next = doc.selectFirst("a.next-page[href], a[rel=next][href]")
+                ?.absUrl("href")
+                ?.takeIf { url ->
+                    val nextPath = comicPath(url)
+                    nextPath != null && (nextPath == chapterPath || nextPath.startsWith("$chapterPath/"))
+                }
+                ?.takeUnless { it in visited }
+            if (next != null && visited.size >= MAX_ISSUE_PAGES) {
+                throw IOException("XOXO Comic issue exceeded the $MAX_ISSUE_PAGES-page safety limit")
+            }
+            pageUrl = next
+        }
+
+        if (pages.isEmpty()) throw IOException("XOXO Comic returned no reader pages")
+        return pages.distinct()
+    }
+
+    private fun comicPath(url: String): String? {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        val host = uri.host?.removePrefix("www.") ?: return null
+        val expectedHost = URI(baseUrl).host?.removePrefix("www.") ?: return null
+        if (!host.equals(expectedHost, ignoreCase = true)) return null
+        return uri.path
+    }
+
+    private companion object {
+        const val MAX_ISSUE_PAGES = 500
     }
 }
 
