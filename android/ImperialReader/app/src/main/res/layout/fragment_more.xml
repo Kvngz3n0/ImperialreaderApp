@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@color/black">
+    <LinearLayout
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="vertical">
+        <LinearLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:gravity="center" android:orientation="vertical" android:padding="32dp">
+            <ImageView
+                android:layout_width="72dp" android:layout_height="72dp"
+                android:src="@drawable/ic_launcher_foreground" android:contentDescription="logo"/>
+            <TextView
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:text="Imperial Reader" android:textColor="@color/gold"
+                android:textSize="20sp" android:textStyle="bold"/>
+        </LinearLayout>
+
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switchDownloadedOnly"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="12dp" android:paddingBottom="12dp"
+            android:text="Downloaded only" android:textColor="@color/on_surface" android:textSize="16sp"/>
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switchIncognito"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="12dp" android:paddingBottom="12dp"
+            android:text="Incognito mode (no history)" android:textColor="@color/on_surface" android:textSize="16sp"/>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/card"/>
+
+        <LinearLayout android:id="@+id/rowStorage" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_folder" android:contentDescription="storage"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView style="@style/MoreRowTitle" android:text="Storage folder"/>
+                <TextView android:id="@+id/storageSub" style="@style/MoreRowSub"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/rowScan" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_refresh" android:contentDescription="scan"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView style="@style/MoreRowTitle" android:text="Scan local library"/>
+                <TextView android:id="@+id/scanSub" style="@style/MoreRowSub"
+                    android:text="Reads the local/ folder inside your storage folder"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/rowSettings" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_settings" android:contentDescription="settings"/>
+            <TextView style="@style/MoreRowTitle" android:text="Settings"/>
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/rowBackup" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_backup" android:contentDescription="backup"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView style="@style/MoreRowTitle" android:text="Backup and restore"/>
+                <TextView style="@style/MoreRowSub" android:text="Save or restore your library, categories and progress"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/rowAbout" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_info" android:contentDescription="about"/>
+            <TextView style="@style/MoreRowTitle" android:text="About"/>
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

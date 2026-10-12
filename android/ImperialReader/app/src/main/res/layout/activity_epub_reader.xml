@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/black">
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent" android:layout_height="?attr/actionBarSize"
+        android:background="@color/black" app:navigationIcon="@drawable/ic_arrow_back"/>
+    <WebView android:id="@+id/web"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+    <LinearLayout
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical"
+        android:background="@color/nav" android:padding="4dp">
+        <ImageButton android:id="@+id/btnPrev"
+            android:layout_width="48dp" android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_skip_previous" android:contentDescription="previous"/>
+        <TextView android:id="@+id/txtSection"
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:maxLines="1" android:ellipsize="end"
+            android:textColor="@color/on_surface" android:textSize="14sp"/>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnSmaller" style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="A-"/>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnLarger" style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="A+"/>
+        <ImageButton android:id="@+id/btnNext"
+            android:layout_width="48dp" android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_skip_next" android:contentDescription="next"/>
+    </LinearLayout>
+    <LinearLayout
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center"
+        android:background="@color/nav" android:paddingBottom="4dp">
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnTheme" style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Theme"/>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnTts" style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Listen"/>
+    </LinearLayout>
+</LinearLayout>

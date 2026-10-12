@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/black">
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent" android:layout_height="?attr/actionBarSize"
+        android:background="@color/black" app:navigationIcon="@drawable/ic_arrow_back"/>
+    <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent">
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recycler"
+            android:layout_width="match_parent" android:layout_height="match_parent"
+            android:padding="4dp" android:clipToPadding="false"/>
+        <com.imperialreader.ui.common.StarSpriteView
+            android:id="@+id/sprite"
+            android:layout_width="40dp" android:layout_height="40dp"
+            android:layout_gravity="center"/>
+        <TextView android:id="@+id/emptyText"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="center" android:gravity="center" android:padding="32dp"
+            android:textColor="@color/on_surface_variant" android:visibility="gone"/>
+    </FrameLayout>
+</LinearLayout>

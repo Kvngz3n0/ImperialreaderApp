@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/readerRoot"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="#000000">
+    <androidx.viewpager2.widget.ViewPager2
+        android:id="@+id/pager"
+        android:layout_width="match_parent" android:layout_height="match_parent"/>
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/webtoon"
+        android:layout_width="match_parent" android:layout_height="match_parent"
+        android:visibility="gone"/>
+    <ProgressBar android:id="@+id/readerProgress"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="center"/>
+    <TextView android:id="@+id/readerError"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="center" android:gravity="center" android:padding="32dp"
+        android:textColor="@color/on_surface_variant" android:visibility="gone"/>
+
+    <LinearLayout android:id="@+id/readerTop"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_gravity="top" android:background="@drawable/bg_overlay"
+        android:orientation="horizontal" android:gravity="center_vertical"
+        android:paddingStart="4dp" android:paddingEnd="16dp" android:paddingTop="4dp" android:paddingBottom="4dp">
+        <ImageButton android:id="@+id/btnBack"
+            android:layout_width="48dp" android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:src="@drawable/ic_arrow_back" android:contentDescription="back"/>
+        <LinearLayout
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:orientation="vertical">
+            <TextView android:id="@+id/readerTitle"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:maxLines="1" android:ellipsize="end"
+                android:textColor="@color/white" android:textSize="16sp" android:textStyle="bold"/>
+            <TextView android:id="@+id/readerSubtitle"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:maxLines="1" android:ellipsize="end"
+                android:textColor="@color/on_surface_variant" android:textSize="13sp"/>
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout android:id="@+id/readerBottom"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_gravity="bottom" android:background="@drawable/bg_overlay"
+        android:orientation="vertical" android:padding="8dp">
+        <LinearLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:gravity="center_vertical">
+            <ImageButton android:id="@+id/btnPrevCh"
+                android:layout_width="44dp" android:layout_height="44dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_skip_previous" android:contentDescription="previous chapter"/>
+            <TextView android:id="@+id/txtPage"
+                android:layout_width="36dp" android:layout_height="wrap_content"
+                android:gravity="center" android:textColor="@color/white" android:textSize="13sp"/>
+            <SeekBar android:id="@+id/seek"
+                android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"/>
+            <TextView android:id="@+id/txtTotal"
+                android:layout_width="36dp" android:layout_height="wrap_content"
+                android:gravity="center" android:textColor="@color/white" android:textSize="13sp"/>
+            <ImageButton android:id="@+id/btnNextCh"
+                android:layout_width="44dp" android:layout_height="44dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:src="@drawable/ic_skip_next" android:contentDescription="next chapter"/>
+        </LinearLayout>
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnMode"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"/>
+    </LinearLayout>
+</FrameLayout>

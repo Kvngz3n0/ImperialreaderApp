@@ -1,0 +1,328 @@
+package com.imperialreader.ui.reader
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.Intent
+import android.graphics.Color
+import android.net.Uri
+import android.os.Bundle
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.view.View
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.imperialreader.R
+import com.imperialreader.util.app
+import com.imperialreader.util.toast
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONTokener
+import org.w3c.dom.Element
+import org.w3c.dom.Node
+import org.xml.sax.InputSource
+import java.io.File
+import java.io.IOException
+import java.io.StringReader
+import java.net.URLDecoder
+import java.util.Locale
+import java.util.zip.ZipInputStream
+import javax.xml.parsers.DocumentBuilderFactory
+
+/** Minimal EPUB reader: unzips to cache, follows the OPF spine and shows each section in a WebView. */
+class EpubReaderActivity : AppCompatActivity() {
+
+    companion object {
+        private const val EXTRA_CHAPTER = "chapter_id"
+        private const val EXTRA_URI = "uri"
+        fun intent(ctx: Context, chapterId: Long, uri: String): Intent =
+            Intent(ctx, EpubReaderActivity::class.java)
+                .putExtra(EXTRA_CHAPTER, chapterId)
+                .putExtra(EXTRA_URI, uri)
+    }
+
+    private class Book(val title: String, val spine: List<File>, val titles: List<String>)
+
+    private lateinit var web: WebView
+    private lateinit var txtSection: TextView
+    private var book: Book? = null
+    private var index = 0
+    private var zoom = 100
+    private var chapterId = -1L
+    private var readerTheme = 0
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var speaking = false
+    private var resumeSpeaking = false
+    private lateinit var btnTts: com.google.android.material.button.MaterialButton
+
+    /** background, text, link colours: dark, sepia, light */
+    private val themes = listOf(
+        Triple("#0A0A0A", "#E8E8E8", "#F0D77A"),
+        Triple("#F4ECD8", "#3B2F20", "#8A5A00"),
+        Triple("#FFFFFF", "#111111", "#1A5FB4")
+    )
+
+    private fun applyTheme() {
+        val (bg, fg, link) = themes[readerTheme]
+        web.setBackgroundColor(Color.parseColor(bg))
+        web.evaluateJavascript(
+            "(function(){var s=document.getElementById('ir-style');if(!s){s=document.createElement('style');" +
+                "s.id='ir-style';document.head.appendChild(s);}" +
+                "s.innerHTML='html,body{background:$bg !important;color:$fg !important;padding:0 12px;line-height:1.65} " +
+                "a{color:$link !important} img{max-width:100% !important;height:auto}';})()", null
+        )
+    }
+
+    // ---------------------------------------------------------------- read aloud (text-to-speech)
+
+    private fun startSpeaking() {
+        if (!ttsReady) {
+            toast("Text-to-speech isn't ready on this device")
+            return
+        }
+        speaking = true
+        btnTts.text = "Stop"
+        web.evaluateJavascript("(function(){return document.body.innerText;})()") { raw ->
+            val text = (JSONTokener(raw).nextValue() as? String).orEmpty().trim()
+            if (text.isBlank()) {
+                stopSpeaking()
+                return@evaluateJavascript
+            }
+            val max = (TextToSpeech.getMaxSpeechInputLength() - 100).coerceAtLeast(500)
+            val chunks = ArrayList<String>()
+            val current = StringBuilder()
+            for (sentence in text.split(Regex("(?<=[.!?])\\s+"))) {
+                if (current.length + sentence.length + 1 > max && current.isNotEmpty()) {
+                    chunks.add(current.toString())
+                    current.clear()
+                }
+                current.append(sentence).append(' ')
+            }
+            if (current.isNotBlank()) chunks.add(current.toString())
+
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) {}
+                override fun onError(utteranceId: String?) {}
+                override fun onDone(utteranceId: String?) {
+                    if (utteranceId != "last") return
+                    runOnUiThread {
+                        if (!speaking) return@runOnUiThread
+                        val b = book
+                        if (b != null && index < b.spine.lastIndex) {
+                            resumeSpeaking = true // keep going: next section starts when it has loaded
+                            show(index + 1)
+                        } else {
+                            stopSpeaking()
+                        }
+                    }
+                }
+            })
+            chunks.forEachIndexed { i, chunk ->
+                val id = if (i == chunks.lastIndex) "last" else "c$i"
+                tts?.speak(chunk, if (i == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD, null, id)
+            }
+        }
+    }
+
+    private fun stopSpeaking() {
+        speaking = false
+        tts?.stop()
+        if (::btnTts.isInitialized) btnTts.text = "Listen"
+    }
+
+    override fun onDestroy() {
+        tts?.stop()
+        tts?.shutdown()
+        super.onDestroy()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_epub_reader)
+        chapterId = intent.getLongExtra(EXTRA_CHAPTER, -1L)
+        val uri = intent.getStringExtra(EXTRA_URI).orEmpty()
+
+        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar.setNavigationOnClickListener { finish() }
+        web = findViewById(R.id.web)
+        txtSection = findViewById(R.id.txtSection)
+
+        readerTheme = app.prefs.sp.getInt("epub_theme", 0)
+        tts = TextToSpeech(this) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (ttsReady) tts?.language = Locale.getDefault()
+        }
+        btnTts = findViewById(R.id.btnTts)
+        findViewById<View>(R.id.btnTheme).setOnClickListener {
+            readerTheme = (readerTheme + 1) % themes.size
+            app.prefs.sp.edit().putInt("epub_theme", readerTheme).apply()
+            applyTheme()
+        }
+        btnTts.setOnClickListener { if (speaking) stopSpeaking() else startSpeaking() }
+        web.settings.javaScriptEnabled = true
+        web.settings.allowFileAccess = true
+        web.settings.textZoom = zoom
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String?) {
+                applyTheme()
+                if (resumeSpeaking) {
+                    resumeSpeaking = false
+                    view.postDelayed({ startSpeaking() }, 500)
+                }
+            }
+        }
+
+        findViewById<View>(R.id.btnPrev).setOnClickListener { show(index - 1) }
+        findViewById<View>(R.id.btnNext).setOnClickListener { show(index + 1) }
+        findViewById<View>(R.id.btnSmaller).setOnClickListener { setZoom(zoom - 10) }
+        findViewById<View>(R.id.btnLarger).setOnClickListener { setZoom(zoom + 10) }
+        txtSection.setOnClickListener { showContents() }
+
+        lifecycleScope.launch {
+            try {
+                val loaded = withContext(Dispatchers.IO) { openBook(uri) }
+                book = loaded
+                toolbar.title = loaded.title
+                val chapter = app.db.chapterDao().getById(chapterId)
+                app.repo.recordHistory(chapterId)
+                show(if (chapter != null && !chapter.read) chapter.lastPageRead else 0)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast("Couldn't open EPUB: ${e.message}")
+                finish()
+            }
+        }
+    }
+
+    private fun setZoom(value: Int) {
+        zoom = value.coerceIn(60, 220)
+        web.settings.textZoom = zoom
+    }
+
+    private fun show(i: Int) {
+        val b = book ?: return
+        if (i !in b.spine.indices) return
+        if (!resumeSpeaking) stopSpeaking()
+        index = i
+        web.loadUrl(Uri.fromFile(b.spine[i]).toString())
+        txtSection.text = "${i + 1}/${b.spine.size} • ${b.titles[i]}"
+        val last = i == b.spine.lastIndex
+        lifecycleScope.launch {
+            val dao = app.db.chapterDao()
+            val current = dao.getById(chapterId) ?: return@launch
+            dao.saveProgress(chapterId, i, current.read || last)
+        }
+    }
+
+    private fun showContents() {
+        val b = book ?: return
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Contents")
+            .setItems(b.titles.toTypedArray()) { _, which -> show(which) }
+            .show()
+    }
+
+    // ------------------------------------------------------------------ EPUB parsing
+
+    private fun openBook(uriString: String): Book {
+        val root = File(cacheDir, "epub/${uriString.hashCode()}")
+        val marker = File(root, ".done")
+        if (!marker.exists()) {
+            root.deleteRecursively()
+            root.mkdirs()
+            val input = contentResolver.openInputStream(Uri.parse(uriString)) ?: throw IOException("Cannot open file")
+            val rootPath = root.canonicalPath + File.separator
+            input.use { raw ->
+                ZipInputStream(raw).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        val out = File(root, entry.name)
+                        if (out.canonicalPath.startsWith(rootPath)) {
+                            if (entry.isDirectory) out.mkdirs() else {
+                                out.parentFile?.mkdirs()
+                                out.outputStream().use { zip.copyTo(it) }
+                            }
+                        }
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+            marker.writeText("ok")
+        }
+
+        val container = parse(File(root, "META-INF/container.xml"))
+        val rootfile = container.getElementsByTagNameNS("*", "rootfile").item(0) as? Element
+            ?: throw IOException("Invalid EPUB (no rootfile)")
+        val opfFile = File(root, URLDecoder.decode(rootfile.getAttribute("full-path"), "UTF-8"))
+        val opfDir = opfFile.parentFile ?: root
+        val opf = parse(opfFile)
+
+        val title = opf.getElementsByTagNameNS("*", "title").item(0)?.textContent?.trim().orEmpty().ifBlank { "EPUB" }
+
+        val manifest = mutableMapOf<String, Pair<String, String>>() // id -> (href, mediaType)
+        val items = opf.getElementsByTagNameNS("*", "item")
+        for (i in 0 until items.length) {
+            val el = items.item(i) as Element
+            manifest[el.getAttribute("id")] = el.getAttribute("href") to el.getAttribute("media-type")
+        }
+
+        val spine = mutableListOf<File>()
+        val refs = opf.getElementsByTagNameNS("*", "itemref")
+        for (i in 0 until refs.length) {
+            val (href, type) = manifest[(refs.item(i) as Element).getAttribute("idref")] ?: continue
+            if (!type.contains("html") && !type.contains("xml")) continue
+            val f = File(opfDir, URLDecoder.decode(href, "UTF-8"))
+            if (f.exists()) spine.add(f)
+        }
+        if (spine.isEmpty()) throw IOException("This EPUB has no readable sections")
+
+        // chapter titles from the NCX table of contents, when present
+        val titleByPath = mutableMapOf<String, String>()
+        val ncxHref = manifest.values.firstOrNull { it.second == "application/x-dtbncx+xml" }?.first
+        if (ncxHref != null) {
+            val ncxFile = File(opfDir, URLDecoder.decode(ncxHref, "UTF-8"))
+            if (ncxFile.exists()) {
+                val ncx = parse(ncxFile)
+                val points = ncx.getElementsByTagNameNS("*", "navPoint")
+                for (i in 0 until points.length) {
+                    val p = points.item(i) as Element
+                    val label = firstChild(p, "navLabel")?.textContent?.trim().orEmpty()
+                    val src = (firstChild(p, "content") as? Element)?.getAttribute("src").orEmpty()
+                    if (label.isNotBlank() && src.isNotBlank()) {
+                        val f = File(ncxFile.parentFile, URLDecoder.decode(src.substringBefore('#'), "UTF-8"))
+                        titleByPath.putIfAbsent(f.canonicalPath, label)
+                    }
+                }
+            }
+        }
+        val titles = spine.mapIndexed { i, f -> titleByPath[f.canonicalPath] ?: "Section ${i + 1}" }
+        return Book(title, spine, titles)
+    }
+
+    private fun firstChild(parent: Element, localName: String): Node? {
+        val children = parent.childNodes
+        for (i in 0 until children.length) {
+            val n = children.item(i)
+            if (n.nodeType == Node.ELEMENT_NODE && (n.localName ?: n.nodeName).substringAfter(':') == localName) return n
+        }
+        return null
+    }
+
+    private fun parse(file: File): org.w3c.dom.Document {
+        val factory = DocumentBuilderFactory.newInstance()
+        factory.isNamespaceAware = true
+        val builder = factory.newDocumentBuilder()
+        // never fetch external DTDs (EPUB files reference remote ones)
+        builder.setEntityResolver { _, _ -> InputSource(StringReader("")) }
+        return builder.parse(file)
+    }
+}

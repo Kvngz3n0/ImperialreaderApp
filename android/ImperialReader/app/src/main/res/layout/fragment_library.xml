@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:background="@color/black">
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent" android:layout_height="?attr/actionBarSize"
+        android:background="@color/black" app:title="Library"/>
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/categoryTabs"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:background="@color/black" android:visibility="gone"
+        app:tabMode="scrollable"/>
+    <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent">
+        <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+            android:id="@+id/swipe"
+            android:layout_width="match_parent" android:layout_height="match_parent">
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/recycler"
+                android:layout_width="match_parent" android:layout_height="match_parent"
+                android:padding="4dp" android:clipToPadding="false"/>
+        </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+        <com.imperialreader.ui.common.StarSpriteView
+            android:id="@+id/updateSprite"
+            android:layout_width="40dp" android:layout_height="40dp"
+            android:layout_gravity="top|center_horizontal" android:layout_marginTop="12dp"/>
+        <LinearLayout android:id="@+id/emptyView"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_gravity="center" android:orientation="vertical"
+            android:gravity="center" android:padding="32dp" android:visibility="gone">
+            <TextView android:id="@+id/emptyText"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:gravity="center" android:textColor="@color/on_surface_variant" android:textSize="15sp"/>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnGlobalSearch"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_marginTop="16dp" android:text="Search all sources"
+                android:visibility="gone"/>
+        </LinearLayout>
+    </FrameLayout>
+</LinearLayout>

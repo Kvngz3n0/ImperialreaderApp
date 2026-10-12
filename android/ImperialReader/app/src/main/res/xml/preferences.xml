@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <PreferenceCategory android:title="Reader" app:iconSpaceReserved="false">
+        <ListPreference
+            android:key="reader_mode"
+            android:title="Default reading mode"
+            android:entries="@array/reader_mode_names"
+            android:entryValues="@array/reader_mode_values"
+            android:defaultValue="1"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="keep_screen_on"
+            android:title="Keep screen on"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="fullscreen"
+            android:title="Fullscreen"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="tap_navigation"
+            android:title="Tap screen edges to turn pages"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="volume_keys"
+            android:title="Volume keys turn pages"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Library" app:iconSpaceReserved="false">
+        <ListPreference
+            android:key="library_columns"
+            android:title="Grid columns"
+            android:entries="@array/column_names"
+            android:entryValues="@array/column_values"
+            android:defaultValue="3"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="badge_unread"
+            android:title="Show unread badge"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="badge_download"
+            android:title="Show downloaded / local badge"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="refresh_on_start"
+            android:title="Update library on app start"
+            android:summary="Checks every entry for new chapters when the app opens"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Local library" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat
+            android:key="local_covers"
+            android:title="Extract and refresh covers"
+            android:summary="Uses cover.jpg, the first page of a CBZ/CBR, or the EPUB cover, and updates it when the files change"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Browse" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat
+            android:key="show_nsfw_ext"
+            android:summary="Off by default. Also enables adult ratings on MangaDex."
+            android:title="Show 18+ sources and catalogs"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="Advanced" app:iconSpaceReserved="false">
+        <Preference
+            android:key="clear_cache"
+            android:title="Clear cache"
+            android:summary="Image, archive and extension caches"
+            app:iconSpaceReserved="false"/>
+        <Preference
+            android:key="clear_cookies"
+            android:title="Clear cookies"
+            android:summary="Removes Cloudflare / login cookies"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="About" app:iconSpaceReserved="false">
+        <Preference
+            android:key="version"
+            android:title="Version"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+</PreferenceScreen>
