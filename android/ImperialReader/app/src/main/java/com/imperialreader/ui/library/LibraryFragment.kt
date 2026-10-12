@@ -1,6 +1,8 @@
 package com.imperialreader.ui.library
 
 import android.os.Bundle
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -35,6 +37,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 class LibraryFragment : Fragment(R.layout.fragment_library) {
 
@@ -82,6 +85,24 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         )
         recycler.layoutManager = GridLayoutManager(requireContext(), prefs.libraryColumns)
         recycler.adapter = adapter
+        val categorySwipe = GestureDetector(requireContext(), object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (e1 == null) return false
+                val dx = e2.x - e1.x
+                val dy = e2.y - e1.y
+                if (abs(dx) < requireContext().dp(48) || abs(dx) <= abs(dy)) return false
+                moveCategory(if (dx < 0) 1 else -1)
+                return true
+            }
+        })
+        recycler.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                categorySwipe.onTouchEvent(e)
+                return false
+            }
+        })
 
         tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
@@ -213,6 +234,19 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private fun setSelectedCategory(categoryId: Long) {
         selectedCategory.value = categoryId
         requireContext().app.prefs.libraryCategory = categoryId
+    }
+
+    private fun moveCategory(offset: Int) {
+        val filters = listOf(-1L, 0L) + categories.map { it.id }
+        val current = filters.indexOf(selectedCategory.value).coerceAtLeast(0)
+        val target = (current + offset).coerceIn(0, filters.lastIndex)
+        if (target == current) return
+
+        val categoryId = filters[target]
+        rebuildingTabs = true
+        if (categoryId == -1L) tabs.selectTab(null) else tabs.selectTab(tabs.getTabAt(target - 1))
+        rebuildingTabs = false
+        setSelectedCategory(categoryId)
     }
 
     private fun manageCategories() {

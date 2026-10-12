@@ -1,6 +1,7 @@
 package com.imperialreader.data.repo
 
 import android.content.Context
+import androidx.room.withTransaction
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.HistoryEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
@@ -156,7 +157,11 @@ class MangaRepository(private val ctx: Context) {
 
     suspend fun recordHistory(chapterId: Long) {
         if (ctx.app.prefs.incognito) return
-        db.historyDao().upsert(HistoryEntity(chapterId = chapterId, lastRead = System.currentTimeMillis()))
+        db.withTransaction {
+            val mangaId = db.chapterDao().getById(chapterId)?.mangaId ?: return@withTransaction
+            db.historyDao().deleteForManga(mangaId)
+            db.historyDao().upsert(HistoryEntity(chapterId = chapterId, lastRead = System.currentTimeMillis()))
+        }
     }
 
     private fun canonicalUrl(url: String): String =

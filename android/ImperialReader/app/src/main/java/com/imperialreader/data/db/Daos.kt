@@ -126,15 +126,27 @@ interface HistoryDao {
             "c.chapterNumber AS chapterNumber, m.id AS mangaId, m.title AS mangaTitle, " +
             "m.coverUrl AS mangaCover, m.source AS mangaSource " +
             "FROM history h JOIN chapters c ON c.id = h.chapterId JOIN manga m ON m.id = c.mangaId " +
+            "WHERE h.id = (SELECT h2.id FROM history h2 JOIN chapters c2 ON c2.id = h2.chapterId " +
+            "WHERE c2.mangaId = m.id ORDER BY h2.lastRead DESC, h2.id DESC LIMIT 1) " +
             "ORDER BY h.lastRead DESC LIMIT 300"
     )
     fun observe(): Flow<List<HistoryItem>>
 
-    @Query("SELECT * FROM history")
+    @Query(
+        "SELECT h.* FROM history h JOIN chapters c ON c.id = h.chapterId WHERE h.id = " +
+            "(SELECT h2.id FROM history h2 JOIN chapters c2 ON c2.id = h2.chapterId " +
+            "WHERE c2.mangaId = c.mangaId ORDER BY h2.lastRead DESC, h2.id DESC LIMIT 1)"
+    )
     suspend fun all(): List<HistoryEntity>
 
-    @Query("DELETE FROM history WHERE chapterId = :chapterId")
+    @Query("DELETE FROM history WHERE chapterId IN (SELECT id FROM chapters WHERE mangaId = (SELECT mangaId FROM chapters WHERE id = :chapterId))")
     suspend fun delete(chapterId: Long)
+
+    @Query("DELETE FROM history WHERE chapterId IN (SELECT id FROM chapters WHERE mangaId = :mangaId)")
+    suspend fun deleteForManga(mangaId: Long)
+
+    @Query("SELECT h.* FROM history h JOIN chapters c ON c.id = h.chapterId WHERE c.mangaId = :mangaId ORDER BY h.lastRead DESC, h.id DESC LIMIT 1")
+    suspend fun latestForManga(mangaId: Long): HistoryEntity?
 
     @Query("DELETE FROM history")
     suspend fun clear()

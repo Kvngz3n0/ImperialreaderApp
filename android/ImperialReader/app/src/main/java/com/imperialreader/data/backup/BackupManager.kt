@@ -2,6 +2,7 @@ package com.imperialreader.data.backup
 
 import android.content.Context
 import android.net.Uri
+import androidx.room.withTransaction
 import com.imperialreader.data.db.CategoryEntity
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.HistoryEntity
@@ -202,11 +203,23 @@ class BackupManager(private val ctx: Context) {
         }
 
         root.optJSONArray("history")?.let { arr ->
+            val latestByManga = mutableMapOf<Long, HistoryEntity>()
             for (i in 0 until arr.length()) {
                 val h = arr.getJSONObject(i)
                 val m = mangaDao.find(h.getString("source"), h.getString("mangaUrl")) ?: continue
                 val ch = chapterDao.getAll(m.id).firstOrNull { it.url == h.getString("chapterUrl") } ?: continue
-                db.historyDao().upsert(HistoryEntity(chapterId = ch.id, lastRead = h.optLong("lastRead")))
+                val history = HistoryEntity(chapterId = ch.id, lastRead = h.optLong("lastRead"))
+                if (history.lastRead > (latestByManga[m.id]?.lastRead ?: Long.MIN_VALUE)) {
+                    latestByManga[m.id] = history
+                }
+            }
+            db.withTransaction {
+                latestByManga.forEach { (mangaId, history) ->
+                    val existing = db.historyDao().latestForManga(mangaId)
+                    val latest = if (existing != null && existing.lastRead > history.lastRead) existing else history
+                    db.historyDao().deleteForManga(mangaId)
+                    db.historyDao().upsert(latest)
+                }
             }
         }
         restored

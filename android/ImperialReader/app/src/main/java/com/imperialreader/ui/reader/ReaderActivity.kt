@@ -36,6 +36,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.IOException
+import kotlin.math.abs
 
 class ReaderActivity : AppCompatActivity() {
 
@@ -71,6 +72,7 @@ class ReaderActivity : AppCompatActivity() {
     private var overlaysVisible = false
     private var restoring = false
     private var loadJob: Job? = null
+    private var autoAdvanceFromChapterId = -1L
 
     private val pagerMode get() = mode != AppPrefs.READER_VERTICAL
     private val rtl get() = mode == AppPrefs.READER_RTL
@@ -133,15 +135,27 @@ class ReaderActivity : AppCompatActivity() {
             override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
                 if (pagerMode || pages.isEmpty()) return
                 val lm = rv.layoutManager as LinearLayoutManager
-                val lastFull = lm.findLastCompletelyVisibleItemPosition()
-                val pos = if (lastFull == pages.lastIndex) lastFull else lm.findFirstVisibleItemPosition()
+                val lastVisible = lm.findLastVisibleItemPosition()
+                val pos = if (lastVisible == pages.lastIndex) lastVisible else lm.findFirstVisibleItemPosition()
                 if (pos >= 0) onPageChanged(pos)
             }
         })
 
         gesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+
             override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
                 handleTap(e)
+                return true
+            }
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (!pagerMode || pages.isEmpty() || e1 == null || !isInside(pager, e1)) return false
+                if (overlaysVisible && (isInside(topBar, e1) || isInside(bottomBar, e1))) return false
+                val dx = e2.rawX - e1.rawX
+                val dy = e2.rawY - e1.rawY
+                if (abs(dx) < 48 * resources.displayMetrics.density || abs(dx) <= abs(dy)) return false
+                if ((rtl && dx > 0) || (!rtl && dx < 0)) nextPage() else prevPage()
                 return true
             }
         })
@@ -152,6 +166,7 @@ class ReaderActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ loading
 
     private fun loadChapter(chapterId: Long, startPage: Int?) {
+        val previousChapterId = currentChapterId
         currentChapterId = chapterId
         loadJob?.cancel()
         loadJob = lifecycleScope.launch {
@@ -163,6 +178,7 @@ class ReaderActivity : AppCompatActivity() {
                 manga = m
                 chapters = chapterDao.getAll(m.id).sortedByDescending { it.sourceOrder }
                 index = chapters.indexOfFirst { it.id == chapterId }.coerceAtLeast(0)
+                if (chapterId != previousChapterId) autoAdvanceFromChapterId = -1L
                 val current = chapters[index]
                 title.text = m.title
                 subtitle.text = current.name
@@ -222,6 +238,7 @@ class ReaderActivity : AppCompatActivity() {
         if (pagerMode) {
             webtoon.visibility = View.GONE
             pager.visibility = View.VISIBLE
+            pager.isUserInputEnabled = false
             pager.layoutDirection = if (rtl) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
             pager.adapter = adapter
             pager.offscreenPageLimit = 2
@@ -257,6 +274,10 @@ class ReaderActivity : AppCompatActivity() {
         val read = ch.read || isLast
         chapters = chapters.mapIndexed { i, c -> if (i == index) c.copy(lastPageRead = position, read = read) else c }
         lifecycleScope.launch { app.db.chapterDao().saveProgress(ch.id, position, read) }
+        if (isLast && index < chapters.lastIndex && autoAdvanceFromChapterId != ch.id) {
+            autoAdvanceFromChapterId = ch.id
+            loadChapter(chapters[index + 1].id, 0)
+        }
     }
 
     private fun updatePageUi(position: Int) {
