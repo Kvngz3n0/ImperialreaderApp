@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "fwj1FgnMG-67p_Zh1KTnn"
+uri = "file://android/ImperialReader/app/build/outputs/apk/debug/app-debug.apk"
+type = "unspecified"
+title = "Imperial Reader debug APK"
+description = "Built from the updated Android project with Gradle; APK signature and package metadata verified."
+logical_id = "fc0433a5-08ad-4437-afe5-8e1084c5e367"
+content_hash = "sha256:2ae7de8985c02cdfefdafdd62112220320506fc04982bca80b2fd02e2dec56b9"
+size = 8059701
+mtime_ms = 1791822226498
+storage_uri = "gcs://replit-rams-assets-reed/rams/assets/repl:1b2b3c3a-a6b5-479c-837b-7b8b923e6cd1/fc0433a5-08ad-4437-afe5-8e1084c5e367/66de7b68-9a32-4b85-bcde-3086271b7323"
+storage_version_token = "1791822255804735"
+content_type = "application/octet-stream"

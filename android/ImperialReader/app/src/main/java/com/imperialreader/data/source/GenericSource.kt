@@ -206,7 +206,7 @@ class GenericSource(
         val d = doc(url)
         d.select("script, style, noscript, iframe, nav, header, footer, aside, form, .ads, .ad, [class*=advert], [id*=advert]").remove()
         val best = d.select("div, article, section, main").maxByOrNull { el ->
-            el.children().filter { it.tagName() == "p" }.sumOf { it.text().length }
+            el.children().asSequence().filter { it.tagName() == "p" }.sumOf { it.text().length }
         }
         val html = best?.html().orEmpty()
         if (best == null || best.select("p").size < 2) throw IOException("Couldn't find the chapter text on this page")

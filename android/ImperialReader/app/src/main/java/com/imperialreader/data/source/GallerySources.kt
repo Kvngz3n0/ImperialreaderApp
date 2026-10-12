@@ -43,7 +43,7 @@ class HentaiDbSource : HttpSource() {
 
     private suspend fun list(url: String): MangasPage {
         val doc = Jsoup.parse(getString(url), url)
-        val results = doc.select("a.ca[href]")
+        val results = doc.select("a.ca[href]").asSequence()
             .filter { it.attr("href").startsWith("/comics/") }
             .filter { it.selectFirst("img") != null }
             .mapNotNull { a ->
@@ -51,7 +51,7 @@ class HentaiDbSource : HttpSource() {
                 val title = a.attr("title").ifBlank { a.selectFirst("img")?.attr("alt").orEmpty() }.trim()
                 if (title.isBlank()) return@mapNotNull null
                 SManga(url = href, title = title, thumbnailUrl = imageUrl(a.selectFirst("img")))
-            }.distinctBy { it.url }
+            }.distinctBy { it.url }.toList()
         return MangasPage(results, results.isNotEmpty())
     }
 
@@ -99,7 +99,7 @@ class NhentaiXxxSource : HttpSource() {
 
     private suspend fun list(url: String): MangasPage {
         val doc = Jsoup.parse(getString(url), url)
-        val results = doc.select("a[href]")
+        val results = doc.select("a[href]").asSequence()
             .filter { it.attr("href").startsWith("/g/") }
             .filter { it.selectFirst("img") != null }
             .mapNotNull { a ->
@@ -115,7 +115,7 @@ class NhentaiXxxSource : HttpSource() {
                     title = title,
                     thumbnailUrl = imageUrl(img)
                 )
-            }.distinctBy { it.url }
+            }.distinctBy { it.url }.toList()
         return MangasPage(results, results.isNotEmpty())
     }
 
@@ -178,7 +178,7 @@ class NhentaiXxxSource : HttpSource() {
     }
 
     private fun galleryPageCount(doc: Document, id: String): Int {
-        val linkedPages = doc.select("a[href]")
+        val linkedPages = doc.select("a[href]").asSequence()
             .filter { it.attr("href").startsWith("/g/$id/") }
             .mapNotNull { Regex("""/g/\Q$id\E/(\d+)/?""").find(it.attr("href"))?.groupValues?.get(1)?.toIntOrNull() }
             .maxOrNull() ?: 0
@@ -304,7 +304,7 @@ class XoxoComicSource : HttpSource() {
 
     private suspend fun list(url: String): MangasPage {
         val doc = Jsoup.parse(getString(url), url)
-        val items = doc.select("a[href]")
+        val items = doc.select("a[href]").asSequence()
             .filter {
                 it.attr("href").startsWith("/comic/") &&
                     it.selectFirst("img") != null &&
@@ -316,7 +316,7 @@ class XoxoComicSource : HttpSource() {
                     .removeSuffix(" Comic").trim()
                 if (title.isBlank() || !href.startsWith("$baseUrl/comic/")) return@mapNotNull null
                 SManga(url = href, title = title, thumbnailUrl = imageUrl(a.selectFirst("img")))
-            }.distinctBy { it.url }
+            }.distinctBy { it.url }.toList()
         return MangasPage(items, items.isNotEmpty())
     }
 
@@ -333,7 +333,7 @@ class XoxoComicSource : HttpSource() {
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val doc = Jsoup.parse(getString(manga.url), manga.url)
-        val rows = doc.select("a[href]")
+        val rows = doc.select("a[href]").asSequence()
             .filter { it.attr("href").contains("/issue-") }
             .mapNotNull { a ->
                 val url = a.absUrl("href").takeIf { it.startsWith("$baseUrl/comic/") } ?: return@mapNotNull null
@@ -341,7 +341,7 @@ class XoxoComicSource : HttpSource() {
                 val number = Regex("""(?i)(?:issue|#)[\s-]*(\d+(?:\.\d+)?)""").find(name)
                     ?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
                 SChapter(url, name, chapterNumber = number)
-            }.distinctBy { it.url }
+            }.distinctBy { it.url }.toList()
         if (rows.isEmpty()) throw IOException("XOXO Comic did not return issue links for this series")
         return rows.sortedWith(
             compareByDescending<SChapter> { it.chapterNumber >= 0f }
