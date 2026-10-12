@@ -58,6 +58,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         super.onViewCreated(view, savedInstanceState)
         val app = requireContext().app
         val prefs = app.prefs
+        selectedCategory.value = prefs.libraryCategory
 
         toolbar = view.findViewById(R.id.toolbar)
         val swipe = view.findViewById<SwipeRefreshLayout>(R.id.swipe)
@@ -84,7 +85,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
         tabs.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab) {
-                if (!rebuildingTabs) selectedCategory.value = tab.tag as Long
+                if (!rebuildingTabs) setSelectedCategory(tab.tag as Long)
             }
 
             override fun onTabUnselected(tab: TabLayout.Tab) {}
@@ -93,7 +94,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 rebuildingTabs = true
                 tabs.selectTab(null)
                 rebuildingTabs = false
-                selectedCategory.value = -1L
+                setSelectedCategory(-1L)
             }
         })
 
@@ -199,7 +200,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         tabs.visibility = View.VISIBLE
         val entries = listOf(0L to "Default") + list.map { it.id to it.name }
         if (selectedCategory.value >= 0 && entries.none { it.first == selectedCategory.value }) {
-            selectedCategory.value = -1L
+            setSelectedCategory(-1L)
         }
         for ((id, name) in entries) {
             val tab = tabs.newTab().setText(name).setTag(id)
@@ -207,6 +208,11 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         }
         if (selectedCategory.value == -1L) tabs.selectTab(null)
         rebuildingTabs = false
+    }
+
+    private fun setSelectedCategory(categoryId: Long) {
+        selectedCategory.value = categoryId
+        requireContext().app.prefs.libraryCategory = categoryId
     }
 
     private fun manageCategories() {

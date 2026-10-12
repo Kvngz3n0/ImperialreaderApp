@@ -61,6 +61,9 @@ class AppPrefs(context: Context) {
     var sortMode: Int
         get() = sp.getInt("library_sort", 0)
         set(v) = sp.edit { putInt("library_sort", v) }
+    var libraryCategory: Long
+        get() = sp.getLong("library_category", -1L)
+        set(v) = sp.edit { putLong("library_category", v) }
     var filterUnread: Boolean
         get() = sp.getBoolean("filter_unread", false)
         set(v) = sp.edit { putBoolean("filter_unread", v) }
