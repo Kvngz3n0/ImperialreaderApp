@@ -11,6 +11,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.room.withTransaction
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -39,7 +40,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private val query = MutableStateFlow("")
     private val tick = MutableStateFlow(0)
-    private val selectedCategory = MutableStateFlow(-1L) // -1 = All, 0 = Default, else category id
+    private val selectedCategory = MutableStateFlow(-1L) // -1 = no category filter, 0 = Default, else category id
     private var shownCount = 0
     private var rebuildingTabs = false
     private var categories: List<CategoryEntity> = emptyList()
@@ -87,7 +88,13 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             }
 
             override fun onTabUnselected(tab: TabLayout.Tab) {}
-            override fun onTabReselected(tab: TabLayout.Tab) {}
+            override fun onTabReselected(tab: TabLayout.Tab) {
+                if (rebuildingTabs) return
+                rebuildingTabs = true
+                tabs.selectTab(null)
+                rebuildingTabs = false
+                selectedCategory.value = -1L
+            }
         })
 
         toolbar.inflateMenu(R.menu.library_menu)
@@ -189,18 +196,16 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         categories = list
         rebuildingTabs = true
         tabs.removeAllTabs()
-        if (list.isEmpty()) {
-            tabs.visibility = View.GONE
+        tabs.visibility = View.VISIBLE
+        val entries = listOf(0L to "Default") + list.map { it.id to it.name }
+        if (selectedCategory.value >= 0 && entries.none { it.first == selectedCategory.value }) {
             selectedCategory.value = -1L
-        } else {
-            tabs.visibility = View.VISIBLE
-            val entries = listOf(-1L to "All", 0L to "Default") + list.map { it.id to it.name }
-            if (entries.none { it.first == selectedCategory.value }) selectedCategory.value = -1L
-            for ((id, name) in entries) {
-                val tab = tabs.newTab().setText(name).setTag(id)
-                tabs.addTab(tab, id == selectedCategory.value)
-            }
         }
+        for ((id, name) in entries) {
+            val tab = tabs.newTab().setText(name).setTag(id)
+            tabs.addTab(tab, id == selectedCategory.value)
+        }
+        if (selectedCategory.value == -1L) tabs.selectTab(null)
         rebuildingTabs = false
     }
 
@@ -217,25 +222,59 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     }
 
     private fun categoryOptions(category: CategoryEntity) {
+        val index = categories.indexOfFirst { it.id == category.id }
+        val actions = buildList {
+            if (index > 0) add("Move up")
+            if (index in 0 until categories.lastIndex) add("Move down")
+            add("Rename")
+            add("Delete")
+        }
         MaterialAlertDialogBuilder(requireContext())
             .setTitle(category.name)
-            .setItems(arrayOf("Rename", "Delete")) { _, which ->
-                if (which == 0) askCategoryName(category) else {
+            .setItems(actions.toTypedArray()) { _, which ->
+                when (actions[which]) {
+                    "Move up" -> moveCategory(category, -1)
+                    "Move down" -> moveCategory(category, 1)
+                    "Rename" -> askCategoryName(category)
+                    "Delete" -> {
                     MaterialAlertDialogBuilder(requireContext())
                         .setTitle("Delete “${category.name}”?")
                         .setMessage("Entries in it move back to Default. Nothing is removed from your library.")
                         .setPositiveButton("Delete") { _, _ ->
                             viewLifecycleOwner.lifecycleScope.launch {
                                 val db = requireContext().app.db
-                                db.mangaDao().clearCategory(category.id)
-                                db.categoryDao().delete(category.id)
+                                db.withTransaction {
+                                    db.mangaDao().clearCategory(category.id)
+                                    db.categoryDao().delete(category.id)
+                                    db.categoryDao().getAll().forEachIndexed { order, remaining ->
+                                        db.categoryDao().setSortOrder(remaining.id, order)
+                                    }
+                                }
                             }
                         }
                         .setNegativeButton("Cancel", null)
                         .show()
+                    }
                 }
             }
             .show()
+    }
+
+    private fun moveCategory(category: CategoryEntity, offset: Int) {
+        val ordered = categories.toMutableList()
+        val from = ordered.indexOfFirst { it.id == category.id }
+        val to = from + offset
+        if (from < 0 || to !in ordered.indices) return
+        val moved = ordered.removeAt(from)
+        ordered.add(to, moved)
+        viewLifecycleOwner.lifecycleScope.launch {
+            val db = requireContext().app.db
+            db.withTransaction {
+                ordered.forEachIndexed { order, item ->
+                    db.categoryDao().setSortOrder(item.id, order)
+                }
+            }
+        }
     }
 
     private fun askCategoryName(existing: CategoryEntity?) {
@@ -257,7 +296,10 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 if (name.isBlank()) return@setPositiveButton
                 viewLifecycleOwner.lifecycleScope.launch {
                     val dao = ctx.app.db.categoryDao()
-                    if (existing == null) dao.insert(CategoryEntity(name = name, sortOrder = categories.size))
+                    if (existing == null) {
+                        val nextOrder = (categories.maxOfOrNull { it.sortOrder } ?: -1) + 1
+                        dao.insert(CategoryEntity(name = name, sortOrder = nextOrder))
+                    }
                     else dao.update(existing.copy(name = name))
                 }
             }
@@ -321,10 +363,6 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private fun moveSelectedToCategory() {
         val ids = selectedIds.toList()
         if (ids.isEmpty()) return
-        if (categories.isEmpty()) {
-            requireContext().toast("Create a category first from the Categories menu")
-            return
-        }
         viewLifecycleOwner.lifecycleScope.launch {
             val ctx = requireContext()
             val category = LibraryActions.chooseCategory(ctx, 0L) ?: return@launch
@@ -378,12 +416,8 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                             ctx.toast("Marked all chapters as unread")
                         }
                         3 -> {
-                            if (categories.isEmpty()) {
-                                ctx.toast("Create a category first (⋮ → Categories)")
-                            } else {
-                                val picked = LibraryActions.chooseCategory(ctx, manga.categoryId)
-                                if (picked != null) db.mangaDao().setCategory(mangaId, picked)
-                            }
+                            val picked = LibraryActions.chooseCategory(ctx, manga.categoryId)
+                            if (picked != null) db.mangaDao().setCategory(mangaId, picked)
                         }
                         4 -> ctx.app.repo.toggleFavorite(manga)
                     }
