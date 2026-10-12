@@ -49,6 +49,14 @@ class AppPrefs(context: Context) {
         get() = sp.getString("storage_uri", null)
         set(v) = sp.edit { putString("storage_uri", v) }
 
+    var automaticBackupAt: Long
+        get() = sp.getLong("automatic_backup_at", 0L)
+        set(v) = sp.edit { putLong("automatic_backup_at", v) }
+
+    var automaticBackupStatus: String?
+        get() = sp.getString("automatic_backup_status", null)
+        set(v) = sp.edit { putString("automatic_backup_status", v) }
+
     // ---- library state ----
     var sortMode: Int
         get() = sp.getInt("library_sort", 0)

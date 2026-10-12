@@ -47,7 +47,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 
-data class ChapterRow(val chapter: ChapterEntity, val progress: Int?)
+data class ChapterRow(val chapter: ChapterEntity, val progress: Int?, val selected: Boolean = false)
 
 class MangaDetailsActivity : AppCompatActivity() {
 
@@ -61,7 +61,10 @@ class MangaDetailsActivity : AppCompatActivity() {
     private var manga: MangaEntity? = null
     private var rows: List<ChapterRow> = emptyList()
     private val reversed = MutableStateFlow(false)
+    private val selectedChapterIds = linkedSetOf<Long>()
+    private var chapterSelectionMode = false
 
+    private lateinit var toolbar: MaterialToolbar
     private lateinit var swipe: SwipeRefreshLayout
     private lateinit var fab: ExtendedFloatingActionButton
     private lateinit var headerAdapter: HeaderAdapter
@@ -76,7 +79,7 @@ class MangaDetailsActivity : AppCompatActivity() {
             return
         }
 
-        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar = findViewById(R.id.toolbar)
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.inflateMenu(R.menu.details_menu)
         toolbar.setOnMenuItemClickListener { onMenu(it.itemId); true }
@@ -90,8 +93,14 @@ class MangaDetailsActivity : AppCompatActivity() {
             onWeb = { openWeb() }
         )
         chapterAdapter = ChapterAdapter(
-            onClick = { row -> startActivity(ReaderActivity.intent(this, row.chapter.id)) },
-            onLong = { row, anchor -> showChapterMenu(row, anchor) },
+            onClick = { row ->
+                if (chapterSelectionMode) toggleChapterSelection(row.chapter.id)
+                else startActivity(ReaderActivity.intent(this, row.chapter.id))
+            },
+            onLong = { row, anchor ->
+                if (chapterSelectionMode) toggleChapterSelection(row.chapter.id)
+                else showChapterMenu(row, anchor)
+            },
             onDownload = { row -> onDownloadClick(row) }
         )
         recycler.layoutManager = LinearLayoutManager(this)
@@ -108,19 +117,21 @@ class MangaDetailsActivity : AppCompatActivity() {
                 launch {
                     app.db.mangaDao().observe(mangaId).filterNotNull().collect { m ->
                         manga = m
-                        toolbar.title = m.title
                         headerAdapter.update(m, rows.size)
+                        updateChapterSelectionMenu()
                     }
                 }
                 launch {
                     combine(app.db.chapterDao().observe(mangaId), app.downloads.progress, reversed) { list, progress, rev ->
-                        val mapped = list.map { ChapterRow(it, progress[it.id]) }
+                        val mapped = list.map { ChapterRow(it, progress[it.id], it.id in selectedChapterIds) }
                         if (rev) mapped.reversed() else mapped
                     }.collect { list ->
+                        selectedChapterIds.retainAll(list.map { it.chapter.id }.toSet())
                         rows = list
                         chapterAdapter.submitList(list)
                         manga?.let { headerAdapter.update(it, list.size) }
                         updateFab()
+                        updateChapterSelectionMenu()
                     }
                 }
                 launch {
@@ -221,6 +232,74 @@ class MangaDetailsActivity : AppCompatActivity() {
             R.id.action_mark_all_read -> markAll(true)
             R.id.action_mark_all_unread -> markAll(false)
             R.id.action_delete_downloads -> deleteAllDownloads()
+            R.id.action_select_chapters -> {
+                chapterSelectionMode = true
+                updateChapterSelectionMenu()
+            }
+            R.id.action_select_all_chapters -> selectAllChapters()
+            R.id.action_mark_selected_read -> markSelectedChapters(true)
+            R.id.action_mark_selected_unread -> markSelectedChapters(false)
+            R.id.action_cancel_chapter_selection -> clearChapterSelection()
+        }
+    }
+
+    private fun updateChapterSelectionMenu() {
+        if (!::toolbar.isInitialized || toolbar.menu.size() == 0) return
+        toolbar.title = when {
+            !chapterSelectionMode -> manga?.title.orEmpty()
+            selectedChapterIds.isEmpty() -> "Select chapters"
+            else -> "${selectedChapterIds.size} selected"
+        }
+        val menu = toolbar.menu
+        menu.findItem(R.id.action_download)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_sort)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_refresh)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_mark_all_read)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_mark_all_unread)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_delete_downloads)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_select_chapters)?.isVisible = !chapterSelectionMode
+        menu.findItem(R.id.action_select_all_chapters)?.isVisible = chapterSelectionMode
+        menu.findItem(R.id.action_mark_selected_read)?.isVisible =
+            chapterSelectionMode && selectedChapterIds.isNotEmpty()
+        menu.findItem(R.id.action_mark_selected_unread)?.isVisible =
+            chapterSelectionMode && selectedChapterIds.isNotEmpty()
+        menu.findItem(R.id.action_cancel_chapter_selection)?.isVisible = chapterSelectionMode
+    }
+
+    private fun toggleChapterSelection(chapterId: Long) {
+        if (!chapterSelectionMode) chapterSelectionMode = true
+        if (!selectedChapterIds.add(chapterId)) selectedChapterIds.remove(chapterId)
+        if (selectedChapterIds.isEmpty()) chapterSelectionMode = false
+        renderChapterSelection()
+    }
+
+    private fun selectAllChapters() {
+        val ids = rows.map { it.chapter.id }
+        if (ids.isNotEmpty() && ids.all { it in selectedChapterIds }) selectedChapterIds.removeAll(ids.toSet())
+        else selectedChapterIds.addAll(ids)
+        if (selectedChapterIds.isEmpty()) chapterSelectionMode = false
+        renderChapterSelection()
+    }
+
+    private fun clearChapterSelection() {
+        chapterSelectionMode = false
+        selectedChapterIds.clear()
+        renderChapterSelection()
+    }
+
+    private fun renderChapterSelection() {
+        rows = rows.map { it.copy(selected = it.chapter.id in selectedChapterIds) }
+        chapterAdapter.submitList(rows)
+        updateChapterSelectionMenu()
+    }
+
+    private fun markSelectedChapters(read: Boolean) {
+        val ids = selectedChapterIds.toList()
+        if (ids.isEmpty()) return
+        lifecycleScope.launch {
+            ids.chunked(400).forEach { app.db.chapterDao().setRead(it, read) }
+            clearChapterSelection()
+            toast(if (read) "Marked ${ids.size} chapters as read" else "Marked ${ids.size} chapters as unread")
         }
     }
 
@@ -296,10 +375,17 @@ class MangaDetailsActivity : AppCompatActivity() {
         val c = row.chapter
         val dao = app.db.chapterDao()
         val popup = PopupMenu(this, anchor)
-        popup.menu.add(0, 1, 0, if (c.read) "Mark as unread" else "Mark as read")
-        popup.menu.add(0, 2, 1, "Mark previous as read")
-        popup.menu.add(0, 3, 2, if (c.bookmark) "Remove bookmark" else "Bookmark")
+        popup.menu.add(0, 0, 0, "Select for bulk actions")
+        popup.menu.add(0, 1, 1, if (c.read) "Mark as unread" else "Mark as read")
+        popup.menu.add(0, 2, 2, "Mark previous as read")
+        popup.menu.add(0, 3, 3, if (c.bookmark) "Remove bookmark" else "Bookmark")
         popup.setOnMenuItemClickListener { item ->
+            if (item.itemId == 0) {
+                chapterSelectionMode = true
+                selectedChapterIds.add(c.id)
+                renderChapterSelection()
+                return@setOnMenuItemClickListener true
+            }
             lifecycleScope.launch {
                 when (item.itemId) {
                     1 -> dao.setRead(listOf(c.id), !c.read)
@@ -384,6 +470,7 @@ class MangaDetailsActivity : AppCompatActivity() {
         inner class VH(v: View) : RecyclerView.ViewHolder(v) {
             val title: TextView = v.findViewById(R.id.chTitle)
             val sub: TextView = v.findViewById(R.id.chSub)
+            val selectionMark: TextView = v.findViewById(R.id.chSelectionMark)
             val frame: FrameLayout = v.findViewById(R.id.chDlFrame)
             val icon: ImageView = v.findViewById(R.id.chDlIcon)
             val progress: CircularProgressIndicator = v.findViewById(R.id.chDlProgress)
@@ -397,6 +484,7 @@ class MangaDetailsActivity : AppCompatActivity() {
             val c = row.chapter
             h.title.text = (if (c.bookmark) "★ " else "") + c.name
             h.title.alpha = if (c.read) 0.5f else 1f
+            h.selectionMark.visibility = if (row.selected) View.VISIBLE else View.GONE
             h.sub.text = listOfNotNull(
                 relativeTime(c.dateUpload).takeIf { it.isNotBlank() },
                 c.scanlator?.takeIf { it.isNotBlank() },

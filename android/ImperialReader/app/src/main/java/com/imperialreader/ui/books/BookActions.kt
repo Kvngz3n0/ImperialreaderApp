@@ -61,6 +61,9 @@ object BookActions {
     /** Fetches chapters one by one, saves one EPUB per chapter under local/, and opens the library entry. */
     private fun downloadNovel(activity: AppCompatActivity, item: BookItem, source: BookSource, limit: Int) {
         var job: Job? = null
+        val queueKey = "novel:${item.sourceId}:${item.key}"
+        val app = activity.applicationContext.app
+        app.downloads.reportExternalDownload(queueKey, item.title, "Fetching chapter list")
         val dialog = MaterialAlertDialogBuilder(activity)
             .setTitle(item.title)
             .setMessage("Reading chapter list…")
@@ -74,6 +77,10 @@ object BookActions {
                 if (list.isEmpty()) throw IOException("No chapters found. This site may need a browser to list them.")
                 list.forEachIndexed { i, ch ->
                     dialog.setMessage("Downloading chapter ${i + 1} of ${list.size}\n${ch.title}")
+                    app.downloads.reportExternalDownload(
+                        queueKey, item.title, "Chapter ${i + 1} of ${list.size} · ${ch.title}",
+                        saved * 100 / list.size
+                    )
                     val html = try {
                         source.chapterHtml(ch).takeIf { it.isNotBlank() }
                             ?: throw IOException("The source returned an empty chapter")
@@ -111,6 +118,8 @@ object BookActions {
                 dialog.dismiss()
                 val partial = if (saved > 0) " ($saved chapter(s) saved)" else ""
                 activity.toast("Download failed$partial: ${e.message}")
+            } finally {
+                app.downloads.removeExternalDownload(queueKey)
             }
         }
     }
@@ -151,6 +160,9 @@ object BookActions {
 
     private fun addToLibrary(activity: AppCompatActivity, item: BookItem) {
         activity.toast("Downloading “${item.title}”…")
+        val app = activity.applicationContext.app
+        val queueKey = "epub:${item.sourceId}:${item.key}"
+        app.downloads.reportExternalDownload(queueKey, item.title, "Downloading EPUB")
         activity.lifecycleScope.launch {
             try {
                 val id = withContext(Dispatchers.IO) { download(activity.applicationContext, item) }
@@ -159,6 +171,8 @@ object BookActions {
                 throw e
             } catch (e: Exception) {
                 activity.toast("Download failed: ${e.message}")
+            } finally {
+                app.downloads.removeExternalDownload(queueKey)
             }
         }
     }

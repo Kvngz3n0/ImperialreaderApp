@@ -28,9 +28,19 @@ import okhttp3.Request
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
+data class DownloadQueueItem(
+    val taskKey: String,
+    val mangaId: Long?,
+    val mangaTitle: String,
+    val chapterId: Long?,
+    val chapterName: String,
+    val progress: Int,
+    val downloading: Boolean
+)
+
 /**
  * Sequential chapter download queue (3 pages in parallel per chapter).
- * Progress is exposed per chapter id (0..100). A chapter id that is present is queued or downloading.
+ * Progress is exposed per chapter id (0..100), with a separate ordered snapshot for the More tab.
  * The queue lives in memory; chapters that finished are flagged `downloaded` in the database.
  */
 class DownloadManager(private val ctx: Context) {
@@ -40,15 +50,73 @@ class DownloadManager(private val ctx: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val queue = ArrayDeque<Task>()
     private var worker: Job? = null
+    private var activeTask: Task? = null
+    private val externalTasks = LinkedHashMap<String, DownloadQueueItem>()
 
     private val _progress = MutableStateFlow<Map<Long, Int>>(emptyMap())
     val progress: StateFlow<Map<Long, Int>> = _progress
 
+    private val _queueItems = MutableStateFlow<List<DownloadQueueItem>>(emptyList())
+    val queueItems: StateFlow<List<DownloadQueueItem>> = _queueItems
+
     private val _errors = MutableSharedFlow<String>(extraBufferCapacity = 16)
     val errors: SharedFlow<String> = _errors
 
+    @Synchronized
     private fun setProgress(id: Long, value: Int?) {
         _progress.value = if (value == null) _progress.value - id else _progress.value + (id to value)
+        publishQueueLocked()
+    }
+
+    /** Called under this manager's monitor. */
+    private fun publishQueueLocked() {
+        val values = _progress.value
+        val items = buildList {
+            activeTask?.let { task ->
+                add(
+                    DownloadQueueItem(
+                        "chapter:${task.chapter.id}", task.manga.id, task.manga.title, task.chapter.id, task.chapter.name,
+                        values[task.chapter.id] ?: 0, downloading = true
+                    )
+                )
+            }
+            queue.forEach { task ->
+                add(
+                    DownloadQueueItem(
+                        "chapter:${task.chapter.id}", task.manga.id, task.manga.title, task.chapter.id, task.chapter.name,
+                        values[task.chapter.id] ?: 0, downloading = false
+                    )
+                )
+            }
+            addAll(externalTasks.values)
+        }
+        _queueItems.value = items
+    }
+
+    /** Adds or updates a non-chapter-manager download (currently EPUB/catalog downloads). */
+    @Synchronized
+    fun reportExternalDownload(
+        taskKey: String,
+        title: String,
+        detail: String,
+        progress: Int = 0
+    ) {
+        externalTasks[taskKey] = DownloadQueueItem(
+            taskKey = taskKey,
+            mangaId = null,
+            mangaTitle = title,
+            chapterId = null,
+            chapterName = detail,
+            progress = progress.coerceIn(0, 100),
+            downloading = true
+        )
+        publishQueueLocked()
+    }
+
+    @Synchronized
+    fun removeExternalDownload(taskKey: String) {
+        externalTasks.remove(taskKey)
+        publishQueueLocked()
     }
 
     @Synchronized
@@ -64,11 +132,17 @@ class DownloadManager(private val ctx: Context) {
     @Synchronized
     private fun startWorker() {
         if (worker?.isActive == true) return
+        if (queue.isEmpty()) return
         DownloadService.start(ctx)
         worker = scope.launch {
             try {
                 while (true) {
-                    val task = synchronized(this@DownloadManager) { queue.removeFirstOrNull() } ?: break
+                    val task = synchronized(this@DownloadManager) {
+                        queue.removeFirstOrNull().also {
+                            activeTask = it
+                            publishQueueLocked()
+                        }
+                    } ?: break
                     try {
                         download(task)
                     } catch (e: CancellationException) {
@@ -77,11 +151,19 @@ class DownloadManager(private val ctx: Context) {
                         ctx.app.storage.deleteDownload(task.manga, task.chapter)
                         _errors.tryEmit("Download failed: ${task.chapter.name} (${e.message})")
                     } finally {
-                        setProgress(task.chapter.id, null)
+                        synchronized(this@DownloadManager) {
+                            _progress.value = _progress.value - task.chapter.id
+                            if (activeTask?.chapter?.id == task.chapter.id) activeTask = null
+                            publishQueueLocked()
+                        }
                     }
                 }
             } finally {
                 DownloadService.stop(ctx)
+                synchronized(this@DownloadManager) {
+                    worker = null
+                    if (queue.isNotEmpty()) startWorker()
+                }
             }
         }
     }

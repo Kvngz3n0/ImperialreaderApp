@@ -48,6 +48,12 @@ interface MangaDao {
     @Query("UPDATE manga SET categoryId = :categoryId WHERE id = :id")
     suspend fun setCategory(id: Long, categoryId: Long)
 
+    @Query("UPDATE manga SET categoryId = :categoryId WHERE id IN (:ids)")
+    suspend fun setCategory(ids: List<Long>, categoryId: Long)
+
+    @Query("UPDATE manga SET favorite = 0, dateAdded = 0 WHERE id IN (:ids)")
+    suspend fun removeFromLibrary(ids: List<Long>)
+
     @Query("UPDATE manga SET categoryId = 0 WHERE categoryId = :categoryId")
     suspend fun clearCategory(categoryId: Long)
 

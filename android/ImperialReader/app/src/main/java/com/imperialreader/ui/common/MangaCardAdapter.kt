@@ -19,6 +19,7 @@ data class CardItem(
     val badge1: String? = null,
     val badge2: String? = null,
     val dim: Boolean = false,
+    val selected: Boolean = false,
     val headers: Map<String, String> = emptyMap(),
     val tag: Any? = null
 )
@@ -35,6 +36,7 @@ class MangaCardAdapter(
         val title: TextView = view.findViewById(R.id.title)
         val badge1: TextView = view.findViewById(R.id.badgeUnread)
         val badge2: TextView = view.findViewById(R.id.badgeDl)
+        val selectedMark: TextView = view.findViewById(R.id.selectionMark)
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
@@ -56,6 +58,8 @@ class MangaCardAdapter(
         holder.itemView.alpha = if (item.dim) 0.5f else 1f
         bindBadge(holder.badge1, item.badge1)
         bindBadge(holder.badge2, item.badge2)
+        holder.selectedMark.visibility = if (item.selected) View.VISIBLE else View.GONE
+        holder.itemView.isActivated = item.selected
         holder.itemView.setOnClickListener { onClick(item) }
         holder.itemView.setOnLongClickListener {
             onLongClick?.invoke(item)

@@ -54,6 +54,16 @@ class StorageManager(private val ctx: Context) {
         return Uri.decode(Uri.parse(uri).lastPathSegment ?: uri)
     }
 
+    /** Rolling automatic backups use the selected root, or private app storage if none is selected. */
+    fun automaticBackupDir(): DocumentFile {
+        root()?.let { selected ->
+            findOrCreateDir(selected, "autobackup")?.let { return it }
+        }
+        val dir = File(ctx.filesDir, "autobackup")
+        dir.mkdirs()
+        return DocumentFile.fromFile(dir)
+    }
+
     /** The local/ folder; falls back to app storage when no folder was picked (same as downloads/). */
     fun localDir(): DocumentFile? {
         root()?.let { r -> return findOrCreateDir(r, "local") }

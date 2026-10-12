@@ -43,18 +43,22 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private var shownCount = 0
     private var rebuildingTabs = false
     private var categories: List<CategoryEntity> = emptyList()
+    private var visibleItems: List<LibraryItem> = emptyList()
+    private var selectionMode = false
+    private val selectedIds = linkedSetOf<Long>()
 
     private lateinit var adapter: MangaCardAdapter
     private lateinit var recycler: RecyclerView
     private lateinit var tabs: TabLayout
     private lateinit var sprite: StarSpriteView
+    private lateinit var toolbar: MaterialToolbar
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val app = requireContext().app
         val prefs = app.prefs
 
-        val toolbar = view.findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar = view.findViewById(R.id.toolbar)
         val swipe = view.findViewById<SwipeRefreshLayout>(R.id.swipe)
         val emptyView = view.findViewById<LinearLayout>(R.id.emptyView)
         val emptyText = view.findViewById<TextView>(R.id.emptyText)
@@ -64,8 +68,15 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         sprite = view.findViewById(R.id.updateSprite)
 
         adapter = MangaCardAdapter(
-            onClick = { item -> startActivity(MangaDetailsActivity.intent(requireContext(), item.tag as Long)) },
-            onLongClick = { item -> showItemMenu(item.tag as Long, item.title) }
+            onClick = { item ->
+                val id = item.tag as Long
+                if (selectionMode) toggleSelection(id)
+                else startActivity(MangaDetailsActivity.intent(requireContext(), id))
+            },
+            onLongClick = { item ->
+                val id = item.tag as Long
+                if (selectionMode) toggleSelection(id) else showItemMenu(id, item.title)
+            }
         )
         recycler.layoutManager = GridLayoutManager(requireContext(), prefs.libraryColumns)
         recycler.adapter = adapter
@@ -101,9 +112,18 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 R.id.action_filter -> showFilterDialog()
                 R.id.action_sort -> showSortDialog()
                 R.id.action_categories -> manageCategories()
+                R.id.action_select -> if (selectionMode) cancelSelection() else {
+                    selectionMode = true
+                    updateSelectionMenu()
+                }
+                R.id.action_select_all -> selectVisible()
+                R.id.action_bulk_category -> moveSelectedToCategory()
+                R.id.action_bulk_remove -> confirmRemoveSelected()
+                R.id.action_cancel_selection -> cancelSelection()
             }
             true
         }
+        updateSelectionMenu()
 
         btnGlobal.setOnClickListener { openGlobal(query.value) }
 
@@ -132,7 +152,9 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                         Triple(items, q, process(items, q, cat))
                     }.collect { (all, q, shown) ->
                         shownCount = shown.size
+                        visibleItems = shown
                         adapter.submitList(shown.map { toCard(it) })
+                        updateSelectionMenu()
                         emptyView.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
                         when {
                             all.isEmpty() -> {
@@ -158,6 +180,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         super.onResume()
         (recycler.layoutManager as? GridLayoutManager)?.spanCount = requireContext().app.prefs.libraryColumns
         tick.value = tick.value + 1
+        updateSelectionMenu()
     }
 
     // ---------------------------------------------------------------- categories
@@ -244,25 +267,117 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     // ---------------------------------------------------------------- long-press menu
 
+    private fun updateSelectionMenu() {
+        if (!::toolbar.isInitialized || toolbar.menu.size() == 0) return
+        val menu = toolbar.menu
+        val selecting = selectionMode
+        toolbar.title = when {
+            !selecting -> "Library"
+            selectedIds.isEmpty() -> "Select entries"
+            else -> "${selectedIds.size} selected"
+        }
+        menu.findItem(R.id.action_search)?.isVisible = !selecting
+        menu.findItem(R.id.action_filter)?.isVisible = !selecting
+        menu.findItem(R.id.action_sort)?.isVisible = !selecting
+        menu.findItem(R.id.action_categories)?.isVisible = !selecting
+        menu.findItem(R.id.action_select)?.isVisible = !selecting
+        menu.findItem(R.id.action_select_all)?.apply {
+            isVisible = selecting
+            title = if (visibleItems.isNotEmpty() && visibleItems.all { it.manga.id in selectedIds }) {
+                "Clear visible selection"
+            } else {
+                "Select visible"
+            }
+        }
+        menu.findItem(R.id.action_bulk_category)?.isVisible = selecting && selectedIds.isNotEmpty()
+        menu.findItem(R.id.action_bulk_remove)?.isVisible = selecting && selectedIds.isNotEmpty()
+        menu.findItem(R.id.action_cancel_selection)?.isVisible = selecting
+    }
+
+    private fun toggleSelection(id: Long) {
+        if (!selectionMode) selectionMode = true
+        if (!selectedIds.add(id)) selectedIds.remove(id)
+        if (selectedIds.isEmpty()) selectionMode = false
+        updateSelectionMenu()
+        tick.value = tick.value + 1
+    }
+
+    private fun selectVisible() {
+        val ids = visibleItems.map { it.manga.id }
+        if (ids.isNotEmpty() && ids.all { it in selectedIds }) selectedIds.removeAll(ids.toSet())
+        else selectedIds.addAll(ids)
+        if (selectedIds.isEmpty()) selectionMode = false
+        updateSelectionMenu()
+        tick.value = tick.value + 1
+    }
+
+    private fun cancelSelection() {
+        selectionMode = false
+        selectedIds.clear()
+        updateSelectionMenu()
+        tick.value = tick.value + 1
+    }
+
+    private fun moveSelectedToCategory() {
+        val ids = selectedIds.toList()
+        if (ids.isEmpty()) return
+        if (categories.isEmpty()) {
+            requireContext().toast("Create a category first from the Categories menu")
+            return
+        }
+        viewLifecycleOwner.lifecycleScope.launch {
+            val ctx = requireContext()
+            val category = LibraryActions.chooseCategory(ctx, 0L) ?: return@launch
+            ids.chunked(400).forEach { ctx.app.db.mangaDao().setCategory(it, category) }
+            cancelSelection()
+            ctx.toast("Moved ${ids.size} entries")
+        }
+    }
+
+    private fun confirmRemoveSelected() {
+        val ids = selectedIds.toList()
+        if (ids.isEmpty()) return
+        val ctx = requireContext()
+        MaterialAlertDialogBuilder(ctx)
+            .setTitle("Remove ${ids.size} entries from library?")
+            .setMessage("This removes the entries from your library. Downloaded files remain on your device.")
+            .setPositiveButton("Remove") { _, _ ->
+                viewLifecycleOwner.lifecycleScope.launch {
+                    ids.chunked(400).forEach { ctx.app.db.mangaDao().removeFromLibrary(it) }
+                    cancelSelection()
+                    ctx.toast("Removed ${ids.size} entries from the library")
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun showItemMenu(mangaId: Long, title: String) {
         val ctx = requireContext()
-        val options = arrayOf("Mark as read", "Mark as unread", "Change category", "Remove from library")
+        val options = arrayOf("Select for bulk actions", "Mark as read", "Mark as unread", "Change category", "Remove from library")
         MaterialAlertDialogBuilder(ctx)
             .setTitle(title)
             .setItems(options) { _, which ->
+                if (which == 0) {
+                    selectionMode = true
+                    selectedIds.add(mangaId)
+                    updateSelectionMenu()
+                    tick.value = tick.value + 1
+                    return@setItems
+                }
                 viewLifecycleOwner.lifecycleScope.launch {
                     val db = ctx.app.db
                     val manga = db.mangaDao().getById(mangaId) ?: return@launch
                     when (which) {
-                        0 -> {
+                        1 -> {
                             db.chapterDao().setReadForManga(mangaId, true)
                             ctx.toast("Marked all chapters as read")
                         }
-                        1 -> {
+                        2 -> {
                             db.chapterDao().setReadForManga(mangaId, false)
                             ctx.toast("Marked all chapters as unread")
                         }
-                        2 -> {
+                        3 -> {
                             if (categories.isEmpty()) {
                                 ctx.toast("Create a category first (⋮ → Categories)")
                             } else {
@@ -270,7 +385,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                                 if (picked != null) db.mangaDao().setCategory(mangaId, picked)
                             }
                         }
-                        3 -> ctx.app.repo.toggleFavorite(manga)
+                        4 -> ctx.app.repo.toggleFavorite(manga)
                     }
                 }
             }
@@ -311,6 +426,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 else -> null
             },
             headers = requireContext().app.sources.get(m.source)?.imageHeaders() ?: emptyMap(),
+            selected = m.id in selectedIds,
             tag = m.id
         )
     }

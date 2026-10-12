@@ -30,6 +30,26 @@
 
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/card"/>
 
+        <TextView
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:paddingStart="16dp" android:paddingTop="18dp" android:paddingEnd="16dp" android:paddingBottom="6dp"
+            android:text="Download queue" android:textColor="@color/gold" android:textSize="16sp" android:textStyle="bold"/>
+        <TextView android:id="@+id/queueSummary"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingBottom="6dp"
+            android:text="Nothing is queued" android:textColor="@color/on_surface_variant" android:textSize="12sp"/>
+        <TextView android:id="@+id/queueEmpty"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="8dp" android:paddingBottom="16dp"
+            android:text="No active or queued chapter downloads" android:textColor="@color/on_surface_variant" android:textSize="14sp"
+            android:visibility="visible"/>
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/downloadQueue"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:nestedScrollingEnabled="false" android:visibility="gone"/>
+
+        <View android:layout_width="match_parent" android:layout_height="1dp" android:background="@color/card"/>
+
         <LinearLayout android:id="@+id/rowStorage" style="@style/MoreRow">
             <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_folder" android:contentDescription="storage"/>
             <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
@@ -60,6 +80,15 @@
                 android:layout_weight="1" android:orientation="vertical">
                 <TextView style="@style/MoreRowTitle" android:text="Backup and restore"/>
                 <TextView style="@style/MoreRowSub" android:text="Save or restore your library, categories and progress"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/rowAutoBackup" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_backup" android:contentDescription="automatic backup"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView style="@style/MoreRowTitle" android:text="Automatic backup"/>
+                <TextView android:id="@+id/autoBackupSub" style="@style/MoreRowSub"/>
             </LinearLayout>
         </LinearLayout>
 

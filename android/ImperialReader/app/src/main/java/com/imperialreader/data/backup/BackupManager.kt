@@ -12,6 +12,8 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * JSON backup of the library: entries, categories, chapters (read / bookmark / progress) and history.
@@ -20,6 +22,58 @@ import java.io.IOException
 class BackupManager(private val ctx: Context) {
 
     private val db get() = ctx.app.db
+    private val backupMutex get() = automaticBackupMutex
+
+    companion object {
+        private const val AUTO_PREFIX = "imperial_reader_auto_"
+        private const val AUTO_LIMIT = 5
+        private val automaticBackupMutex = Mutex()
+    }
+
+    /**
+     * Creates a complete temporary JSON backup, promotes it to the rolling backup set, then
+     * removes the oldest automatic backups. User-created manual exports are never pruned.
+     */
+    suspend fun createAutomaticBackup(): Int = backupMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val dir = ctx.app.storage.automaticBackupDir()
+            val stamp = System.currentTimeMillis()
+            val finalName = "$AUTO_PREFIX$stamp.json"
+            val temporary = dir.createFile("application/json", "$finalName.part")
+                ?: throw IOException("Cannot create an automatic backup file")
+            var promoted = false
+            try {
+                val entryCount = export(temporary.uri)
+                if (!temporary.renameTo(finalName)) {
+                    throw IOException("Could not finish the automatic backup file")
+                }
+                promoted = true
+                pruneAutomaticBackups(dir)
+                entryCount
+            } catch (e: Exception) {
+                if (!promoted) temporary.delete()
+                throw e
+            }
+        }
+    }
+
+    private fun pruneAutomaticBackups(dir: androidx.documentfile.provider.DocumentFile) {
+        val backups = dir.listFiles()
+            .filter { !it.isDirectory && it.name.orEmpty().startsWith(AUTO_PREFIX) && it.name.orEmpty().endsWith(".json") }
+            .sortedWith(
+                compareBy<androidx.documentfile.provider.DocumentFile> {
+                    it.lastModified().takeIf { modified -> modified > 0L }
+                        ?: it.name.orEmpty().removePrefix(AUTO_PREFIX).removeSuffix(".json").toLongOrNull()
+                        ?: 0L
+                }.thenBy { it.name.orEmpty() }
+            )
+        val excess = (backups.size - AUTO_LIMIT).coerceAtLeast(0)
+        backups.take(excess).forEach { old ->
+            if (!old.delete() && old.exists()) {
+                throw IOException("Could not remove an old automatic backup")
+            }
+        }
+    }
 
     suspend fun export(uri: Uri): Int = withContext(Dispatchers.IO) {
         val categories = db.categoryDao().getAll()

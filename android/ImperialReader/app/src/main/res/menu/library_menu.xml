@@ -7,4 +7,9 @@
     <item android:id="@+id/action_filter" android:icon="@drawable/ic_filter" android:title="Filter" app:showAsAction="ifRoom"/>
     <item android:id="@+id/action_categories" android:title="Categories" app:showAsAction="never"/>
     <item android:id="@+id/action_sort" android:icon="@drawable/ic_sort" android:title="Sort" app:showAsAction="ifRoom"/>
+    <item android:id="@+id/action_select" android:title="Select entries" app:showAsAction="never"/>
+    <item android:id="@+id/action_select_all" android:title="Select visible" android:visible="false" app:showAsAction="never"/>
+    <item android:id="@+id/action_bulk_category" android:title="Move to category" android:visible="false" app:showAsAction="never"/>
+    <item android:id="@+id/action_bulk_remove" android:title="Remove from library" android:visible="false" app:showAsAction="never"/>
+    <item android:id="@+id/action_cancel_selection" android:title="Cancel selection" android:visible="false" app:showAsAction="never"/>
 </menu>

@@ -4,6 +4,7 @@ import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.imperialreader.data.AppPrefs
+import com.imperialreader.data.backup.AutomaticBackupScheduler
 import com.imperialreader.data.db.AppDatabase
 import com.imperialreader.data.download.DownloadManager
 import com.imperialreader.data.network.NetworkHelper
@@ -28,6 +29,7 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        AutomaticBackupScheduler.schedule(this)
     }
 
     override fun newImageLoader(): ImageLoader =
