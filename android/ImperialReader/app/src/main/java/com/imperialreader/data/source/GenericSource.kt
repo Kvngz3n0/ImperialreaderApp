@@ -2,6 +2,7 @@ package com.imperialreader.data.source
 
 import com.imperialreader.data.network.CloudflareException
 import com.imperialreader.util.parseChapterNumber
+import kotlinx.coroutines.CancellationException
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -37,7 +38,10 @@ class GenericSource(
         "/page/{p}", "/?page={p}", "/?paged={p}"
     )
     private val latestCandidates = listOf("/latest?page={p}", "/latest-updates?page={p}", "/latest/page/{p}", "/page/{p}")
-    private val searchCandidates = listOf(
+    private val searchCandidates = (if (novel) listOf(
+        "/search?keyword={q}&page={p}", "/search?q={q}&page={p}", "/search?query={q}&page={p}",
+        "/search?s={q}&page={p}", "/search?name={q}&page={p}", "/?s={q}&paged={p}"
+    ) else emptyList()) + listOf(
         "/?s={q}&paged={p}", "/search?q={q}&page={p}", "/search?keyword={q}&page={p}",
         "/search?s={q}&page={p}", "/search?query={q}&page={p}", "/?s={q}&post_type=wp-manga",
         "/series?search={q}&page={p}", "/series?q={q}&page={p}", "/search?name={q}&page={p}"
@@ -112,21 +116,51 @@ class GenericSource(
 
     override suspend fun search(query: String, page: Int): MangasPage {
         val first = query.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
-        val want = normalizeTitle(first)
-        fun matches(r: MangasPage) = want.isBlank() || r.mangas.any { normalizeTitle(it.title).contains(want) }
-        suspend fun run(pattern: String): MangasPage {
-            val url = baseUrl.trimEnd('/') + pattern.replace("{q}", enc(query)).replace("{p}", page.toString())
-            return MangasPage(parseCards(doc(url)), true)
+        val firstWant = normalizeTitle(first)
+        val novelTerms = Regex("""[\p{L}\p{N}]+""").findAll(query.lowercase())
+            .map { normalizeTitle(it.value) }
+            .filter { it.length > 1 && it !in setOf("novel", "novels", "online") }
+            .distinct()
+            .toList()
+        val novelWant = normalizeTitle(query)
+        fun matches(r: MangasPage, evidence: String): Boolean {
+            if (!novel) return firstWant.isBlank() || r.mangas.any { normalizeTitle(it.title).contains(firstWant) }
+            val pageEvidence = normalizeTitle(evidence)
+            return (novelWant.isNotBlank() && pageEvidence.contains(novelWant)) ||
+                (novelTerms.isNotEmpty() && r.mangas.any { manga ->
+                    val title = normalizeTitle(manga.title)
+                    novelTerms.all { term -> title.contains(term) }
+                })
         }
-        searchPattern?.let { return run(it) }
+        suspend fun run(pattern: String): Pair<MangasPage, String> {
+            val url = baseUrl.trimEnd('/') + pattern.replace("{q}", enc(query)).replace("{p}", page.toString())
+            val d = doc(url)
+            return MangasPage(parseCards(d), true) to
+                (d.title() + " " + d.selectFirst("h1,h2")?.text().orEmpty())
+        }
+        searchPattern?.let { pattern ->
+            try {
+                val (result, evidence) = run(pattern)
+                if (!novel || matches(result, evidence)) return result
+                searchPattern = null
+            } catch (e: CloudflareException) {
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                searchPattern = null
+            }
+        }
         for (c in searchCandidates) {
             try {
-                val r = run(c)
-                if (r.mangas.isNotEmpty() && matches(r)) {
+                val (r, evidence) = run(c)
+                if (r.mangas.isNotEmpty() && matches(r, evidence)) {
                     searchPattern = c
                     return r
                 }
             } catch (e: CloudflareException) {
+                throw e
+            } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
             }
