@@ -28,6 +28,11 @@ class BackupManager(private val ctx: Context) {
     companion object {
         private const val AUTO_PREFIX = "imperial_reader_auto_"
         private const val AUTO_LIMIT = 5
+        private val DEVICE_ONLY_SETTINGS = setOf(
+            "storage_uri",
+            "automatic_backup_at",
+            "automatic_backup_status"
+        )
         private val automaticBackupMutex = Mutex()
     }
 
@@ -115,6 +120,7 @@ class BackupManager(private val ctx: Context) {
             historyArr.put(JSONObject().put("source", m.source).put("mangaUrl", m.url).put("chapterUrl", ch.url).put("lastRead", h.lastRead))
         }
         root.put("history", historyArr)
+        root.put("settings", encodeSettings())
 
         val out = ctx.contentResolver.openOutputStream(uri, "w") ?: throw IOException("Cannot write the backup file")
         out.use { it.write(root.toString().toByteArray(Charsets.UTF_8)) }
@@ -127,6 +133,7 @@ class BackupManager(private val ctx: Context) {
             ?: throw IOException("Cannot read the backup file")
         val root = JSONObject(text)
         if (!root.has("manga")) throw IOException("This is not an Imperial Reader backup")
+        val settings = root.optJSONObject("settings")?.let(::decodeSettings)
 
         val catDao = db.categoryDao()
         val mangaDao = db.mangaDao()
@@ -222,6 +229,86 @@ class BackupManager(private val ctx: Context) {
                 }
             }
         }
+        if (settings != null) restoreSettings(settings)
         restored
+    }
+
+    private fun encodeSettings(): JSONObject {
+        val settings = JSONObject()
+        val values = ctx.app.prefs.sp.all
+        values.forEach { (key, value) ->
+            if (key in DEVICE_ONLY_SETTINGS) return@forEach
+            val encoded = JSONObject()
+            when (value) {
+                is String -> encoded.put("type", "string").put("value", value)
+                is Boolean -> encoded.put("type", "boolean").put("value", value)
+                is Int -> encoded.put("type", "int").put("value", value)
+                is Long -> encoded.put("type", "long").put("value", value)
+                is Float -> encoded.put("type", "float").put("value", value.toDouble())
+                is Set<*> -> {
+                    val strings = value.mapNotNull { it as? String }
+                    if (strings.size != value.size) {
+                        throw IOException("Unsupported preference set: $key")
+                    }
+                    encoded.put("type", "string_set")
+                        .put("value", JSONArray(strings.sorted()))
+                }
+                else -> throw IOException("Unsupported preference type for: $key")
+            }
+            settings.put(key, encoded)
+        }
+        return settings
+    }
+
+    private fun decodeSettings(settings: JSONObject): Map<String, Any> {
+        val values = mutableMapOf<String, Any>()
+        val keys = settings.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key in DEVICE_ONLY_SETTINGS) continue
+            val encoded = settings.optJSONObject(key)
+                ?: throw IOException("Invalid setting entry: $key")
+            val value = encoded.opt("value")
+            values[key] = when (encoded.optString("type")) {
+                "string" -> value as? String ?: throw IOException("Invalid string setting: $key")
+                "boolean" -> value as? Boolean ?: throw IOException("Invalid boolean setting: $key")
+                "int" -> (value as? Number)?.toInt() ?: throw IOException("Invalid integer setting: $key")
+                "long" -> (value as? Number)?.toLong() ?: throw IOException("Invalid long setting: $key")
+                "float" -> (value as? Number)?.toFloat() ?: throw IOException("Invalid float setting: $key")
+                "string_set" -> {
+                    val array = value as? JSONArray ?: throw IOException("Invalid string set: $key")
+                    buildSet {
+                        for (index in 0 until array.length()) {
+                            add(array.optString(index))
+                        }
+                    }
+                }
+                else -> throw IOException("Unknown setting type for: $key")
+            }
+        }
+        return values
+    }
+
+    private fun restoreSettings(settings: Map<String, Any>) {
+        val editor = ctx.app.prefs.sp.edit()
+        ctx.app.prefs.sp.all.keys
+            .filterNot { it in DEVICE_ONLY_SETTINGS }
+            .forEach(editor::remove)
+        settings.forEach { (key, value) ->
+            when (value) {
+                is String -> editor.putString(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Float -> editor.putFloat(key, value)
+                is Set<*> -> {
+                    if (value.any { it !is String }) throw IOException("Invalid string set: $key")
+                    @Suppress("UNCHECKED_CAST")
+                    editor.putStringSet(key, value as Set<String>)
+                }
+                else -> throw IOException("Unsupported setting type for: $key")
+            }
+        }
+        if (!editor.commit()) throw IOException("Could not restore app settings")
     }
 }

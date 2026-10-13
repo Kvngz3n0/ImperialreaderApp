@@ -13,7 +13,6 @@ class AppPrefs(context: Context) {
         const val READER_LTR = 0
         const val READER_RTL = 1
         const val READER_VERTICAL = 2
-        const val DEFAULT_REPO = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
     }
 
     /** 0 = left-to-right, 1 = right-to-left, 2 = vertical/webtoon (stored as string by ListPreference). */
@@ -100,8 +99,4 @@ class AppPrefs(context: Context) {
     var customMadara: Set<String>
         get() = sp.getStringSet("custom_madara", emptySet()) ?: emptySet()
         set(v) = sp.edit { putStringSet("custom_madara", v) }
-
-    var repos: List<String>
-        get() = (sp.getStringSet("repos", null) ?: setOf(DEFAULT_REPO)).toList()
-        set(v) = sp.edit { putStringSet("repos", v.toSet()) }
 }
