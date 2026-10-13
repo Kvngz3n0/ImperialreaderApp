@@ -13,10 +13,14 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.imperialreader.R
+import com.imperialreader.data.db.ChapterEntity
+import com.imperialreader.data.db.LOCAL_SOURCE_ID
+import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
@@ -55,6 +59,10 @@ class EpubReaderActivity : AppCompatActivity() {
     private var index = 0
     private var zoom = 100
     private var chapterId = -1L
+    private var manga: MangaEntity? = null
+    private var epubChapters: List<ChapterEntity> = emptyList()
+    private var epubChapterIndex = -1
+    private var switchingChapter = false
     private var readerTheme = 0
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -118,6 +126,12 @@ class EpubReaderActivity : AppCompatActivity() {
                         if (b != null && index < b.spine.lastIndex) {
                             resumeSpeaking = true // keep going: next section starts when it has loaded
                             show(index + 1)
+                        } else if (
+                            epubChapterIndex in epubChapters.indices &&
+                            epubChapterIndex < epubChapters.lastIndex
+                        ) {
+                            resumeSpeaking = true
+                            openAdjacentChapter(epubChapterIndex + 1, 0)
                         } else {
                             stopSpeaking()
                         }
@@ -180,8 +194,8 @@ class EpubReaderActivity : AppCompatActivity() {
             }
         }
 
-        findViewById<View>(R.id.btnPrev).setOnClickListener { show(index - 1) }
-        findViewById<View>(R.id.btnNext).setOnClickListener { show(index + 1) }
+        findViewById<View>(R.id.btnPrev).setOnClickListener { moveSection(-1) }
+        findViewById<View>(R.id.btnNext).setOnClickListener { moveSection(1) }
         findViewById<View>(R.id.btnSmaller).setOnClickListener { setZoom(zoom - 10) }
         findViewById<View>(R.id.btnLarger).setOnClickListener { setZoom(zoom + 10) }
         txtSection.setOnClickListener { showContents() }
@@ -192,6 +206,16 @@ class EpubReaderActivity : AppCompatActivity() {
                 book = loaded
                 toolbar.title = loaded.title
                 val chapter = app.db.chapterDao().getById(chapterId)
+                manga = chapter?.let { app.db.mangaDao().getById(it.mangaId) }
+                val currentManga = manga
+                if (chapter != null && currentManga?.source == LOCAL_SOURCE_ID) {
+                    epubChapters = withContext(Dispatchers.IO) {
+                        app.db.chapterDao().getAll(chapter.mangaId)
+                            .sortedByDescending { it.sourceOrder }
+                            .filter { chapterFile(it)?.name.orEmpty().endsWith(".epub", ignoreCase = true) }
+                    }
+                    epubChapterIndex = epubChapters.indexOfFirst { it.id == chapter.id }
+                }
                 app.repo.recordHistory(chapterId)
                 show(if (chapter != null && !chapter.read) chapter.lastPageRead else 0)
             } catch (e: CancellationException) {
@@ -221,6 +245,55 @@ class EpubReaderActivity : AppCompatActivity() {
             val current = dao.getById(chapterId) ?: return@launch
             dao.saveProgress(chapterId, i, current.read || last)
         }
+    }
+
+    private fun moveSection(direction: Int) {
+        val b = book ?: return
+        val targetSection = index + direction
+        if (targetSection in b.spine.indices) {
+            show(targetSection)
+            return
+        }
+
+        if (epubChapterIndex !in epubChapters.indices) return
+        val targetChapter = epubChapterIndex + direction
+        if (targetChapter !in epubChapters.indices) return
+        val targetStart = if (direction > 0) 0 else Int.MAX_VALUE
+        openAdjacentChapter(targetChapter, targetStart)
+    }
+
+    private fun openAdjacentChapter(targetIndex: Int, startSection: Int) {
+        if (switchingChapter || targetIndex !in epubChapters.indices) return
+        switchingChapter = true
+        lifecycleScope.launch {
+            try {
+                val target = epubChapters[targetIndex]
+                val file = withContext(Dispatchers.IO) {
+                    chapterFile(target) ?: throw IOException("Downloaded EPUB chapter not found")
+                }
+                val loaded = withContext(Dispatchers.IO) { openBook(file.uri.toString()) }
+                chapterId = target.id
+                epubChapterIndex = targetIndex
+                book = loaded
+                findViewById<MaterialToolbar>(R.id.toolbar).title = manga?.title ?: loaded.title
+                app.repo.recordHistory(target.id)
+                val section = if (startSection == Int.MAX_VALUE) loaded.spine.lastIndex else startSection
+                show(section.coerceIn(0, loaded.spine.lastIndex))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                resumeSpeaking = false
+                stopSpeaking()
+                toast("Couldn't open EPUB chapter: ${e.message}")
+            } finally {
+                switchingChapter = false
+            }
+        }
+    }
+
+    private fun chapterFile(chapter: ChapterEntity): DocumentFile? {
+        val currentManga = manga ?: return null
+        return app.storage.localChapterFile(currentManga, chapter)
     }
 
     private fun showContents() {
