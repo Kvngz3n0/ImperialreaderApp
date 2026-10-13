@@ -45,6 +45,7 @@ class SourceManager(private val context: Context) {
         WordPressSource("MangaFire", "https://mangafire.to"),
         // Western comics
         WordPressSource("ReadAllComics", "https://readallcomics.com"),
+        WordPressSource("ReadComicsOnline", "https://readcomicsonline.ru"),
         WordPressSource("ComicExtra", "https://comicextra.net"),
         WordPressSource("XOXOComics", "https://xoxocomics.net"),
         WordPressSource("RizzComics", "https://rizzfables.com"),

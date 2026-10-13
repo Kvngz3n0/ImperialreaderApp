@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.documentfile.provider.DocumentFile
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.MangaEntity
+import com.imperialreader.data.book.BookSources
+import com.imperialreader.data.book.NovelChapterEpub
 import com.imperialreader.data.source.SChapter
 import com.imperialreader.data.source.SManga
 import com.imperialreader.util.app
@@ -170,6 +172,11 @@ class DownloadManager(private val ctx: Context) {
 
     private suspend fun download(task: Task) {
         val app = ctx.app
+        if (BookSources.get(task.manga.source)?.isWebNovel == true) {
+            NovelChapterEpub.download(ctx, task.manga, task.chapter)
+            app.db.chapterDao().setDownloaded(task.chapter.id, true)
+            return
+        }
         val source = app.sources.get(task.manga.source) ?: throw IOException("Source not available")
         val loaded = source.loadPages(
             SManga(url = task.manga.url, title = task.manga.title),
@@ -234,7 +241,10 @@ class DownloadManager(private val ctx: Context) {
     }
 
     suspend fun deleteDownload(manga: MangaEntity, chapter: ChapterEntity) {
-        ctx.app.storage.deleteDownload(manga, chapter)
+        val dir = ctx.app.storage.chapterDir(manga, chapter, create = false)
+        if (dir != null && dir.exists() && !ctx.app.storage.deleteDownload(manga, chapter)) {
+            throw IOException("Could not delete downloaded files for “${chapter.name}”")
+        }
         ctx.app.db.chapterDao().setDownloaded(chapter.id, false)
     }
 }

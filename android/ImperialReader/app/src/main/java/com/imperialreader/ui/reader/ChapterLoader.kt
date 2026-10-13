@@ -6,6 +6,8 @@ import androidx.documentfile.provider.DocumentFile
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.MangaEntity
+import com.imperialreader.data.book.BookSources
+import com.imperialreader.data.book.NovelChapterEpub
 import com.imperialreader.data.source.SChapter
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.storage.Archives
@@ -27,6 +29,12 @@ object ChapterLoader {
 
     suspend fun load(ctx: Context, manga: MangaEntity, chapter: ChapterEntity): LoadedChapter =
         withContext(Dispatchers.IO) {
+            if (BookSources.get(manga.source)?.isWebNovel == true) {
+                val downloaded = if (chapter.downloaded) NovelChapterEpub.downloadedFile(ctx, manga, chapter) else null
+                val uri = downloaded?.uri?.toString()
+                    ?: NovelChapterEpub.onlineUri(ctx, manga, chapter)
+                return@withContext LoadedChapter.Epub(uri)
+            }
             if (manga.source == LOCAL_SOURCE_ID) return@withContext loadLocal(ctx, manga, chapter)
 
             if (chapter.downloaded) {

@@ -1,9 +1,12 @@
 package com.imperialreader.data.source
 
 import com.imperialreader.util.parseChapterNumber
+import com.imperialreader.data.network.CloudflareException
+import kotlinx.coroutines.CancellationException
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.io.IOException
 import java.net.URI
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -90,9 +93,15 @@ open class MadaraSource(
         val ajaxHeaders = mapOf("X-Requested-With" to "XMLHttpRequest", "Referer" to mangaUrl)
 
         // 1) modern Madara: POST <manga>/ajax/chapters/
-        var doc: Document? = runCatching {
+        var doc: Document? = try {
             Jsoup.parse(postString(mangaUrl + "ajax/chapters/", headers = ajaxHeaders), baseUrl)
-        }.getOrNull()
+        } catch (e: CloudflareException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
         var elements = doc?.select("li.wp-manga-chapter").orEmpty()
 
         // 2) the manga page itself may already contain the chapter list
@@ -107,7 +116,7 @@ open class MadaraSource(
             val postId = pageDoc.selectFirst("#manga-chapters-holder")?.attr("data-id")?.ifBlank { null }
                 ?: pageDoc.selectFirst("input.rating-post-id")?.attr("value")
             if (!postId.isNullOrBlank()) {
-                doc = runCatching {
+                doc = try {
                     Jsoup.parse(
                         postString(
                             "$baseUrl/wp-admin/admin-ajax.php",
@@ -115,12 +124,18 @@ open class MadaraSource(
                             ajaxHeaders
                         ), baseUrl
                     )
-                }.getOrNull()
+                } catch (e: CloudflareException) {
+                    throw e
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
                 elements = doc?.select("li.wp-manga-chapter").orEmpty()
             }
         }
 
-        return elements.mapNotNull { li ->
+        val chapters = elements.mapNotNull { li ->
             val a = li.selectFirst("a") ?: return@mapNotNull null
             val href = a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) }
             val name = a.text().trim()
@@ -134,6 +149,8 @@ open class MadaraSource(
                 chapterNumber = parseChapterNumber(name)
             )
         }.distinctBy { it.url }
+        if (chapters.isEmpty()) throw IOException("Madara did not return a readable chapter list")
+        return chapters
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {

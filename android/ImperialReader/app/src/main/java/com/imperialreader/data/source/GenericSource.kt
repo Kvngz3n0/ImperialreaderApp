@@ -115,57 +115,61 @@ class GenericSource(
     }
 
     override suspend fun search(query: String, page: Int): MangasPage {
-        val first = query.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
-        val firstWant = normalizeTitle(first)
-        val novelTerms = Regex("""[\p{L}\p{N}]+""").findAll(query.lowercase())
+        val terms = Regex("""[\p{L}\p{N}]+""").findAll(query.lowercase())
             .map { normalizeTitle(it.value) }
-            .filter { it.length > 1 && it !in setOf("novel", "novels", "online") }
+            .filter { it.isNotBlank() }
             .distinct()
             .toList()
-        val novelWant = normalizeTitle(query)
-        fun matches(r: MangasPage, evidence: String): Boolean {
-            if (!novel) return firstWant.isBlank() || r.mangas.any { normalizeTitle(it.title).contains(firstWant) }
-            val pageEvidence = normalizeTitle(evidence)
-            return (novelWant.isNotBlank() && pageEvidence.contains(novelWant)) ||
-                (novelTerms.isNotEmpty() && r.mangas.any { manga ->
-                    val title = normalizeTitle(manga.title)
-                    novelTerms.all { term -> title.contains(term) }
-                })
+        if (terms.isEmpty()) return MangasPage(emptyList(), false)
+
+        fun matchingResults(result: MangasPage): MangasPage {
+            val matches = result.mangas.filter { manga ->
+                val title = normalizeTitle(manga.title)
+                terms.all(title::contains)
+            }
+            return MangasPage(matches, result.hasNextPage && matches.isNotEmpty())
         }
-        suspend fun run(pattern: String): Pair<MangasPage, String> {
+
+        suspend fun run(pattern: String): MangasPage {
             val url = baseUrl.trimEnd('/') + pattern.replace("{q}", enc(query)).replace("{p}", page.toString())
-            val d = doc(url)
-            return MangasPage(parseCards(d), true) to
-                (d.title() + " " + d.selectFirst("h1,h2")?.text().orEmpty())
+            val pageDoc = doc(url)
+            return matchingResults(MangasPage(parseCards(pageDoc), true))
         }
+        var last: Exception? = null
+        var successfulResponse = false
         searchPattern?.let { pattern ->
             try {
-                val (result, evidence) = run(pattern)
-                if (!novel || matches(result, evidence)) return result
+                val result = run(pattern)
+                successfulResponse = true
+                if (result.mangas.isNotEmpty()) return result
                 searchPattern = null
             } catch (e: CloudflareException) {
                 throw e
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                last = e
                 searchPattern = null
             }
         }
         for (c in searchCandidates) {
             try {
-                val (r, evidence) = run(c)
-                if (r.mangas.isNotEmpty() && matches(r, evidence)) {
+                val result = run(c)
+                successfulResponse = true
+                if (result.mangas.isNotEmpty()) {
                     searchPattern = c
-                    return r
+                    return result
                 }
             } catch (e: CloudflareException) {
                 throw e
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                last = e
             }
         }
-        return MangasPage(emptyList(), false)
+        if (successfulResponse) return MangasPage(emptyList(), false)
+        throw last ?: IOException("Search failed on this site")
     }
 
     // ------------------------------------------------------------------ details & chapters
@@ -218,20 +222,24 @@ class GenericSource(
         var d = doc(manga.url)
         collect(d)
         if (novel) {
-            // novel sites paginate long chapter lists
-            var pages = 0
-            while (pages < 40) {
+            val visited = mutableSetOf(d.location())
+            var pages = 1
+            while (true) {
                 val next = d.selectFirst("a[rel=next], ul.pagination a:matchesOwn(^(Next|›|»|>)\$), a.next")
                     ?.absUrl("href")?.takeIf { it.isNotBlank() && it != d.location() } ?: break
-                d = try { doc(next) } catch (e: Exception) { break }
-                val before = found.size
+                if (host(next) != site) throw IOException("Novel chapter pagination left the source site")
+                if (!visited.add(next)) throw IOException("Novel chapter pagination contains a loop")
+                if (pages >= MAX_NOVEL_CHAPTER_PAGES) {
+                    throw IOException("Novel chapter list exceeds the safe limit of $MAX_NOVEL_CHAPTER_PAGES pages")
+                }
+                d = doc(next)
                 collect(d)
-                if (found.size == before) break
                 pages++
             }
         }
         // newest first: highest chapter number first, unnumbered ones keep page order at the end
         val list = found.values.toList()
+        if (list.isEmpty()) throw IOException("No chapters could be read from this site")
         return list.filter { it.chapterNumber >= 0f }.sortedByDescending { it.chapterNumber } + list.filter { it.chapterNumber < 0f }
     }
 
@@ -275,5 +283,9 @@ class GenericSource(
         val folder = urls.groupBy { it.substringBeforeLast('/') }.maxByOrNull { it.value.size }?.value.orEmpty()
         if (folder.size >= 2) return folder.distinct()
         return best
+    }
+
+    private companion object {
+        const val MAX_NOVEL_CHAPTER_PAGES = 1000
     }
 }

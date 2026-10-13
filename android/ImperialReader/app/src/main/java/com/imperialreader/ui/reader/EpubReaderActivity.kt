@@ -18,6 +18,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.imperialreader.R
+import com.imperialreader.data.book.BookSources
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.MangaEntity
@@ -63,6 +64,7 @@ class EpubReaderActivity : AppCompatActivity() {
     private var epubChapters: List<ChapterEntity> = emptyList()
     private var epubChapterIndex = -1
     private var switchingChapter = false
+    private var transientEpubFile: File? = null
     private var readerTheme = 0
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -152,6 +154,10 @@ class EpubReaderActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        transientEpubFile?.let { file ->
+            File(cacheDir, "epub/${Uri.fromFile(file).toString().hashCode()}").deleteRecursively()
+            file.delete()
+        }
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
@@ -163,6 +169,7 @@ class EpubReaderActivity : AppCompatActivity() {
         setContentView(R.layout.activity_epub_reader)
         chapterId = intent.getLongExtra(EXTRA_CHAPTER, -1L)
         val uri = intent.getStringExtra(EXTRA_URI).orEmpty()
+        rememberTransientEpub(uri)
 
         val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
         toolbar.setNavigationOnClickListener { finish() }
@@ -208,11 +215,16 @@ class EpubReaderActivity : AppCompatActivity() {
                 val chapter = app.db.chapterDao().getById(chapterId)
                 manga = chapter?.let { app.db.mangaDao().getById(it.mangaId) }
                 val currentManga = manga
-                if (chapter != null && currentManga?.source == LOCAL_SOURCE_ID) {
+                if (chapter != null && currentManga != null &&
+                    (currentManga.source == LOCAL_SOURCE_ID || BookSources.get(currentManga.source)?.isWebNovel == true)
+                ) {
                     epubChapters = withContext(Dispatchers.IO) {
-                        app.db.chapterDao().getAll(chapter.mangaId)
-                            .sortedByDescending { it.sourceOrder }
-                            .filter { chapterFile(it)?.name.orEmpty().endsWith(".epub", ignoreCase = true) }
+                        val all = app.db.chapterDao().getAll(chapter.mangaId).sortedByDescending { it.sourceOrder }
+                        if (currentManga.source == LOCAL_SOURCE_ID) {
+                            all.filter { chapterFile(it)?.name.orEmpty().endsWith(".epub", ignoreCase = true) }
+                        } else {
+                            all
+                        }
                     }
                     epubChapterIndex = epubChapters.indexOfFirst { it.id == chapter.id }
                 }
@@ -268,10 +280,16 @@ class EpubReaderActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val target = epubChapters[targetIndex]
-                val file = withContext(Dispatchers.IO) {
-                    chapterFile(target) ?: throw IOException("Downloaded EPUB chapter not found")
+                val currentManga = manga ?: throw IOException("Manga not found")
+                val loadedChapter = ChapterLoader.load(this@EpubReaderActivity, currentManga, target)
+                val uri = (loadedChapter as? LoadedChapter.Epub)?.uri
+                    ?: throw IOException("The next chapter is not an EPUB")
+                val loaded = withContext(Dispatchers.IO) { openBook(uri) }
+                transientEpubFile?.let { oldFile ->
+                    File(cacheDir, "epub/${Uri.fromFile(oldFile).toString().hashCode()}").deleteRecursively()
+                    oldFile.delete()
                 }
-                val loaded = withContext(Dispatchers.IO) { openBook(file.uri.toString()) }
+                rememberTransientEpub(uri)
                 chapterId = target.id
                 epubChapterIndex = targetIndex
                 book = loaded
@@ -296,6 +314,13 @@ class EpubReaderActivity : AppCompatActivity() {
         return app.storage.localChapterFile(currentManga, chapter)
     }
 
+    private fun rememberTransientEpub(uriString: String) {
+        val uri = Uri.parse(uriString)
+        if (uri.scheme != "file") return
+        val file = uri.path?.let(::File) ?: return
+        if (file.parentFile == File(cacheDir, "online-epub")) transientEpubFile = file
+    }
+
     private fun showContents() {
         val b = book ?: return
         MaterialAlertDialogBuilder(this)
@@ -309,10 +334,18 @@ class EpubReaderActivity : AppCompatActivity() {
     private fun openBook(uriString: String): Book {
         val root = File(cacheDir, "epub/${uriString.hashCode()}")
         val marker = File(root, ".done")
-        if (!marker.exists()) {
+        val uri = Uri.parse(uriString)
+        val sourceFile = uri.path?.takeIf { uri.scheme == "file" }?.let(::File)
+        val sourceDoc = if (sourceFile == null) DocumentFile.fromSingleUri(this, uri) else null
+        val signature = listOf(
+            uriString,
+            sourceFile?.lastModified() ?: sourceDoc?.lastModified() ?: 0L,
+            sourceFile?.length() ?: sourceDoc?.length() ?: -1L
+        ).joinToString(":")
+        if (!marker.exists() || marker.readText() != signature) {
             root.deleteRecursively()
             root.mkdirs()
-            val input = contentResolver.openInputStream(Uri.parse(uriString)) ?: throw IOException("Cannot open file")
+            val input = contentResolver.openInputStream(uri) ?: throw IOException("Cannot open file")
             val rootPath = root.canonicalPath + File.separator
             input.use { raw ->
                 ZipInputStream(raw).use { zip ->
@@ -329,7 +362,7 @@ class EpubReaderActivity : AppCompatActivity() {
                     }
                 }
             }
-            marker.writeText("ok")
+            marker.writeText(signature)
         }
 
         val container = parse(File(root, "META-INF/container.xml"))

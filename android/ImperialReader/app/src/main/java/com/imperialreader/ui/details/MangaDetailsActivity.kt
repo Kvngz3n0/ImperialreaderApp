@@ -31,6 +31,7 @@ import com.imperialreader.R
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.MangaEntity
+import com.imperialreader.data.book.BookSources
 import com.imperialreader.data.network.CloudflareException
 import com.imperialreader.data.source.CombinedSource
 import com.imperialreader.data.storage.LocalScanner
@@ -204,19 +205,43 @@ class MangaDetailsActivity : AppCompatActivity() {
         val m = manga ?: return
         lifecycleScope.launch {
             if (m.favorite) {
-                app.repo.toggleFavorite(m)
-                toast("Removed from library")
+                confirmRemoveFromLibrary(m)
             } else if (LibraryActions.addToLibrary(this@MangaDetailsActivity, m)) {
                 toast("Added to library")
             }
         }
     }
 
+    private fun confirmRemoveFromLibrary(manga: MangaEntity) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Remove “${manga.title}” from library?")
+            .setItems(arrayOf("Remove and keep downloaded files", "Delete downloaded files and remove")) { _, which ->
+                lifecycleScope.launch {
+                    try {
+                        if (which == 1) {
+                            app.db.chapterDao().getAll(manga.id).filter { it.downloaded }.forEach { chapter ->
+                                app.downloads.deleteDownload(manga, chapter)
+                            }
+                        }
+                        app.repo.toggleFavorite(manga)
+                        toast("Removed from library")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        toast("Could not remove entry: ${e.message}")
+                    }
+                }
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
     private fun absoluteUrl(): String? {
         val m = manga ?: return null
         if (m.source == CombinedSource.ID) return CombinedSource.webUrl(m.url)
-        val source = app.sources.get(m.source) ?: return null
-        return if (m.url.startsWith("http")) m.url else source.baseUrl.trimEnd('/') + m.url
+        val source = app.sources.get(m.source)
+        if (source != null) return if (m.url.startsWith("http")) m.url else source.baseUrl.trimEnd('/') + m.url
+        return m.url.takeIf { BookSources.get(m.source) != null && it.startsWith("http") }
     }
 
     private fun openWeb() {
@@ -442,7 +467,7 @@ class MangaDetailsActivity : AppCompatActivity() {
             val sourceLabel = when {
                 manga.source == CombinedSource.ID -> "Combined (${CombinedSource.decode(manga.url).size} sources)"
                 manga.source == LOCAL_SOURCE_ID -> "Local"
-                else -> source?.name ?: manga.source
+                else -> source?.name ?: BookSources.get(manga.source)?.name ?: manga.source
             }
             h.status.text = statusLabel(manga.status) + " • " + sourceLabel
             h.btnLibrary.text = if (manga.favorite) "In library" else "Add to library"

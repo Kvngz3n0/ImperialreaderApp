@@ -28,6 +28,7 @@
         <activity android:name=".ui.details.MangaDetailsActivity" android:exported="false"/>
         <activity android:name=".ui.browse.SourceBrowseActivity" android:exported="false"/>
         <activity android:name=".ui.browse.BookBrowseActivity" android:exported="false"/>
+        <activity android:name=".ui.browse.LocalEntriesActivity" android:exported="false"/>
         <activity android:name=".ui.browse.GlobalSearchActivity" android:exported="false"
             android:windowSoftInputMode="adjustResize"/>
         <activity android:name=".ui.reader.ReaderActivity" android:exported="false"

@@ -147,6 +147,8 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 }
                 R.id.action_select_all -> selectVisible()
                 R.id.action_bulk_category -> moveSelectedToCategory()
+                R.id.action_bulk_read -> markSelectedAsRead()
+                R.id.action_bulk_unread -> markSelectedAsUnread()
                 R.id.action_bulk_remove -> confirmRemoveSelected()
                 R.id.action_cancel_selection -> cancelSelection()
             }
@@ -372,6 +374,11 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             }
         }
         menu.findItem(R.id.action_bulk_category)?.isVisible = selecting && selectedIds.isNotEmpty()
+        menu.findItem(R.id.action_bulk_read)?.apply {
+            isVisible = selecting && selectedIds.isNotEmpty()
+            title = "Mark selected as read"
+        }
+        menu.findItem(R.id.action_bulk_unread)?.isVisible = selecting && selectedIds.isNotEmpty()
         menu.findItem(R.id.action_bulk_remove)?.isVisible = selecting && selectedIds.isNotEmpty()
         menu.findItem(R.id.action_cancel_selection)?.isVisible = selecting
     }
@@ -415,19 +422,61 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private fun confirmRemoveSelected() {
         val ids = selectedIds.toList()
         if (ids.isEmpty()) return
+        showRemoveOptions(ids.size) { deleteDownloads ->
+            viewLifecycleOwner.lifecycleScope.launch {
+                try {
+                    removeEntries(ids, deleteDownloads)
+                    cancelSelection()
+                    requireContext().toast("Removed ${ids.size} entries from the library")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    requireContext().toast("Could not remove entries: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun showRemoveOptions(count: Int, onRemove: (Boolean) -> Unit) {
         val ctx = requireContext()
         MaterialAlertDialogBuilder(ctx)
-            .setTitle("Remove ${ids.size} entries from library?")
-            .setMessage("This removes the entries from your library. Downloaded files remain on your device.")
-            .setPositiveButton("Remove") { _, _ ->
-                viewLifecycleOwner.lifecycleScope.launch {
-                    ids.chunked(400).forEach { ctx.app.db.mangaDao().removeFromLibrary(it) }
-                    cancelSelection()
-                    ctx.toast("Removed ${ids.size} entries from the library")
-                }
+            .setTitle("Remove $count entr${if (count == 1) "y" else "ies"} from library?")
+            .setItems(arrayOf("Remove and keep downloaded files", "Delete downloaded files and remove")) { _, which ->
+                onRemove(which == 1)
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun markSelectedAsRead() {
+        markSelectedReadState(true)
+    }
+
+    private fun markSelectedAsUnread() {
+        markSelectedReadState(false)
+    }
+
+    private fun markSelectedReadState(read: Boolean) {
+        val ids = selectedIds.toList()
+        if (ids.isEmpty()) return
+        viewLifecycleOwner.lifecycleScope.launch {
+            ids.chunked(400).forEach { requireContext().app.db.chapterDao().setReadForManga(it, read) }
+            requireContext().toast("Marked ${ids.size} entries as ${if (read) "read" else "unread"}")
+            cancelSelection()
+        }
+    }
+
+    private suspend fun removeEntries(ids: List<Long>, deleteDownloads: Boolean) {
+        val app = requireContext().app
+        if (deleteDownloads) {
+            ids.forEach { mangaId ->
+                val manga = app.db.mangaDao().getById(mangaId) ?: return@forEach
+                app.db.chapterDao().getAll(mangaId).filter { it.downloaded }.forEach { chapter ->
+                    app.downloads.deleteDownload(manga, chapter)
+                }
+            }
+        }
+        ids.chunked(400).forEach { app.db.mangaDao().removeFromLibrary(it) }
     }
 
     private fun showItemMenu(mangaId: Long, title: String) {
@@ -459,7 +508,18 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                             val picked = LibraryActions.chooseCategory(ctx, manga.categoryId)
                             if (picked != null) db.mangaDao().setCategory(mangaId, picked)
                         }
-                        4 -> ctx.app.repo.toggleFavorite(manga)
+                        4 -> showRemoveOptions(1) { deleteDownloads ->
+                            viewLifecycleOwner.lifecycleScope.launch {
+                                try {
+                                    removeEntries(listOf(mangaId), deleteDownloads)
+                                    ctx.toast("Removed from library")
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    ctx.toast("Could not remove entry: ${e.message}")
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -2,6 +2,8 @@ package com.imperialreader.data.book
 
 import android.net.Uri
 import com.imperialreader.App
+import com.imperialreader.data.db.LOCAL_SOURCE_ID
+import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.network.await
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -469,6 +471,7 @@ object BookSources {
         "Light Novel Translations" to "https://lightnovelstranslations.com", "LnMTL" to "https://lnmtl.com",
         "Luxon Scan" to "https://luxonscan.com", "MtlNovel" to "https://www.mtlnovel.com",
         "Novel Buddy" to "https://novelbuddy.com", "Novel Light" to "https://novellight.net",
+        "NovelPing" to "https://novelping.com",
         "Novel Phoenix" to "https://novelphoenix.com", "NovelBin" to "https://novelbin.me",
         "NovelFire" to "https://novelfire.net", "NovelFull" to "https://novelfull.com",
         "PawRead" to "https://pawread.com", "Ranovel" to "https://ranovel.com",
@@ -480,13 +483,40 @@ object BookSources {
     )
 
     val all: List<BookSource> =
-        listOf(GutenbergSource(), InternetArchiveSource(), RoyalRoadSource()) +
+        listOf(LocalBookSource(), GutenbergSource(), InternetArchiveSource(), RoyalRoadSource()) +
             novelSites.map { (name, url) ->
                 when (hostId(url, name)) {
                     "novelphoenix_com" -> NovelPhoenixSource()
                     "novelfire_net" -> NovelFireSource()
+                    "novelping_com" -> NovelPingSource()
                     else -> WebNovelSource("novel_" + hostId(url, name), name, url)
                 }
             }
     fun get(id: String): BookSource? = all.firstOrNull { it.id == id }
+
+    fun itemFor(manga: MangaEntity): BookItem? {
+        val source = get(manga.source) ?: return null
+        if (!source.isWebNovel) return null
+        return BookItem(
+            sourceId = source.id,
+            sourceName = source.name,
+            id = manga.url,
+            title = manga.title,
+            author = manga.author,
+            coverUrl = manga.coverUrl,
+            epubUrl = null,
+            description = manga.description
+        )
+    }
+}
+
+/** Local files are managed by the app's local-folder scanner rather than a network catalog. */
+class LocalBookSource : BookSource {
+    override val id = LOCAL_SOURCE_ID
+    override val name = "Local"
+    override val description = "Add, browse, and remove entries stored on your device"
+    override val inGlobalSearch = false
+
+    override suspend fun popular(page: Int): List<BookItem> = emptyList()
+    override suspend fun search(query: String, page: Int): List<BookItem> = emptyList()
 }

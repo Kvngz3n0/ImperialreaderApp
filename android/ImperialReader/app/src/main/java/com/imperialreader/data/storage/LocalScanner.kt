@@ -45,7 +45,12 @@ class LocalScanner(private val ctx: Context) {
                 n != null && !n.startsWith(".") &&
                     ((it.isDirectory && hasImages(it)) || (!it.isDirectory && isArchive(n)))
             }.sortedWith(compareBy(NaturalOrder) { it.name ?: "" })
-            if (chapterDocs.isEmpty()) continue
+            if (chapterDocs.isEmpty()) {
+                mangaDao.find(LOCAL_SOURCE_ID, folderName)?.let { existing ->
+                    app.db.chapterDao().deleteAllForManga(existing.id)
+                }
+                continue
+            }
 
             val coverDoc = children.firstOrNull {
                 !it.isDirectory && it.name?.matches(Regex("(?i)cover\\.(jpe?g|png|webp)")) == true

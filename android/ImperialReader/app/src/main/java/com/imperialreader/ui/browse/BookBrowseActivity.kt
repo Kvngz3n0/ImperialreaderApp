@@ -15,10 +15,12 @@ import com.imperialreader.R
 import com.imperialreader.data.book.BookItem
 import com.imperialreader.data.book.BookSource
 import com.imperialreader.data.book.BookSources
+import com.imperialreader.data.network.CloudflareException
 import com.imperialreader.ui.books.BookActions
 import com.imperialreader.ui.common.CardItem
 import com.imperialreader.ui.common.MangaCardAdapter
 import com.imperialreader.ui.common.StarSpriteView
+import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
@@ -43,6 +45,8 @@ class BookBrowseActivity : AppCompatActivity() {
     private var page = 1
     private var hasMore = true
     private var loading = false
+    private var cloudflareUrl: String? = null
+    private var retryAfterWebView = false
     private var job: Job? = null
     private val items = mutableListOf<BookItem>()
 
@@ -77,6 +81,11 @@ class BookBrowseActivity : AppCompatActivity() {
 
         sprite = findViewById(R.id.sprite)
         emptyText = findViewById(R.id.emptyText)
+        emptyText.setOnClickListener {
+            val url = cloudflareUrl ?: return@setOnClickListener
+            retryAfterWebView = true
+            startActivity(WebViewActivity.intent(this, url))
+        }
         val recycler = findViewById<RecyclerView>(R.id.recycler)
         adapter = MangaCardAdapter(onClick = { card -> BookActions.show(this, card.tag as BookItem) })
         val lm = GridLayoutManager(this, app.prefs.libraryColumns)
@@ -88,6 +97,14 @@ class BookBrowseActivity : AppCompatActivity() {
             }
         })
         reset()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (retryAfterWebView) {
+            retryAfterWebView = false
+            reset()
+        }
     }
 
     private fun reset() {
@@ -108,6 +125,7 @@ class BookBrowseActivity : AppCompatActivity() {
         job = lifecycleScope.launch {
             try {
                 val result = if (query.isBlank()) source.popular(page) else source.search(query, page)
+                cloudflareUrl = null
                 result.forEach { b -> if (items.none { it.key == b.key }) items.add(b) }
                 hasMore = result.isNotEmpty()
                 page++
@@ -118,7 +136,14 @@ class BookBrowseActivity : AppCompatActivity() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (items.isEmpty()) show("Couldn't load this catalog: ${e.message}\n\nSome sites need a browser (Cloudflare) or have moved.") else hasMore = false
+                if (items.isEmpty() && e is CloudflareException) {
+                    cloudflareUrl = e.url
+                    show("Cloudflare protection detected. Tap here to open the site and solve it, then retry.")
+                } else if (items.isEmpty()) {
+                    show("Couldn't load this catalog: ${e.message}\n\nSome sites need a browser (Cloudflare) or have moved.")
+                } else {
+                    hasMore = false
+                }
             } finally {
                 loading = false
                 sprite.stop()

@@ -12,6 +12,7 @@ import com.google.android.material.button.MaterialButton
 import com.imperialreader.R
 import com.imperialreader.data.book.BookSource
 import com.imperialreader.data.book.BookSources
+import com.imperialreader.data.db.LOCAL_SOURCE_ID
 
 /** Browse → Extensions: the EPUB and web-novel catalogs (Project Gutenberg, Internet Archive, Royal Road, and more). */
 class ExtensionsFragment : Fragment(R.layout.fragment_extensions) {
@@ -21,7 +22,11 @@ class ExtensionsFragment : Fragment(R.layout.fragment_extensions) {
         val recycler = view.findViewById<RecyclerView>(R.id.recycler)
         recycler.layoutManager = LinearLayoutManager(requireContext())
         recycler.adapter = CatalogAdapter(BookSources.all) { source ->
-            startActivity(BookBrowseActivity.intent(requireContext(), source.id))
+            if (source.id == LOCAL_SOURCE_ID) {
+                startActivity(LocalEntriesActivity.intent(requireContext()))
+            } else {
+                startActivity(BookBrowseActivity.intent(requireContext(), source.id))
+            }
         }
     }
 

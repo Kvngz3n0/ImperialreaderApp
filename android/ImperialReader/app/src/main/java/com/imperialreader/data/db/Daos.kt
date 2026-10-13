@@ -54,6 +54,9 @@ interface MangaDao {
     @Query("UPDATE manga SET favorite = 0, dateAdded = 0 WHERE id IN (:ids)")
     suspend fun removeFromLibrary(ids: List<Long>)
 
+    @Query("DELETE FROM manga WHERE id = :id")
+    suspend fun delete(id: Long)
+
     @Query("UPDATE manga SET categoryId = 0 WHERE categoryId = :categoryId")
     suspend fun clearCategory(categoryId: Long)
 
@@ -87,11 +90,23 @@ interface ChapterDao {
     @Update
     suspend fun update(chapter: ChapterEntity)
 
+    @Update
+    suspend fun updateAll(chapters: List<ChapterEntity>)
+
     @Query("UPDATE chapters SET read = :read WHERE id IN (:ids)")
     suspend fun setRead(ids: List<Long>, read: Boolean)
 
     @Query("UPDATE chapters SET read = :read WHERE mangaId = :mangaId")
     suspend fun setReadForManga(mangaId: Long, read: Boolean)
+
+    @Query("UPDATE chapters SET read = :read WHERE mangaId IN (:mangaIds)")
+    suspend fun setReadForManga(mangaIds: List<Long>, read: Boolean)
+
+    @Query("DELETE FROM chapters WHERE mangaId = :mangaId AND url NOT IN (:urls)")
+    suspend fun deleteMissingForManga(mangaId: Long, urls: List<String>)
+
+    @Query("DELETE FROM chapters WHERE mangaId = :mangaId")
+    suspend fun deleteAllForManga(mangaId: Long)
 
     @Query("UPDATE chapters SET bookmark = :bookmark WHERE id = :id")
     suspend fun setBookmark(id: Long, bookmark: Boolean)
@@ -101,12 +116,6 @@ interface ChapterDao {
 
     @Query("UPDATE chapters SET downloaded = :downloaded WHERE id = :id")
     suspend fun setDownloaded(id: Long, downloaded: Boolean)
-
-    @Query(
-        "UPDATE chapters SET sourceOrder = :order, name = :name, dateUpload = :date, " +
-            "chapterNumber = :number, scanlator = :scanlator WHERE id = :id"
-    )
-    suspend fun updateMeta(id: Long, order: Int, name: String, date: Long, number: Float, scanlator: String?)
 
     @Query(
         "SELECT c.*, m.title AS mangaTitle, m.coverUrl AS mangaCover, m.source AS mangaSource " +

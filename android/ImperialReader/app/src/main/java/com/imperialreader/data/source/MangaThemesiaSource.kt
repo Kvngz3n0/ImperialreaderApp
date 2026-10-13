@@ -4,6 +4,7 @@ import com.imperialreader.util.parseChapterNumber
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.io.IOException
 
 /** Engine for the "MangaThemesia" WordPress theme (a very common non-Madara scanlation theme). */
 open class MangaThemesiaSource(
@@ -65,7 +66,7 @@ open class MangaThemesiaSource(
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val doc = Jsoup.parse(getString(manga.url), manga.url)
-        return doc.select("#chapterlist li").mapNotNull { li ->
+        val chapters = doc.select("#chapterlist li").mapNotNull { li ->
             val a = li.selectFirst("a[href]") ?: return@mapNotNull null
             val name = li.selectFirst(".chapternum")?.text()?.trim().orEmpty().ifBlank { a.text().trim() }
             if (name.isBlank()) return@mapNotNull null
@@ -76,6 +77,8 @@ open class MangaThemesiaSource(
                 chapterNumber = parseChapterNumber(li.attr("data-num").ifBlank { name })
             )
         }.distinctBy { it.url }
+        if (chapters.isEmpty()) throw IOException("MangaThemesia did not return a readable chapter list")
+        return chapters
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {

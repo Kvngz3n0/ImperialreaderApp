@@ -6,10 +6,12 @@ import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.HistoryEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.MangaEntity
+import com.imperialreader.data.book.BookSources
 import com.imperialreader.data.source.SChapter
 import com.imperialreader.data.source.CombinedSource
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.source.normalizeTitle
+import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.util.app
 import com.imperialreader.util.parseChapterNumber
 import kotlinx.coroutines.async
@@ -84,6 +86,28 @@ class MangaRepository(private val ctx: Context) {
     /** Re-fetches details + chapter list from the source. Returns the number of NEW chapters. */
     suspend fun refresh(manga: MangaEntity): Int {
         if (manga.source == LOCAL_SOURCE_ID) return 0
+        val bookSource = BookSources.get(manga.source)
+        if (bookSource?.isWebNovel == true) {
+            val item = BookSources.itemFor(manga) ?: throw IOException("Book entry is unavailable")
+            val sourceChapters = bookSource.chapters(item)
+            if (sourceChapters.isEmpty()) {
+                throw IOException("${bookSource.name} returned no chapters; the existing chapter list was kept")
+            }
+            if (sourceChapters.any { it.title.isBlank() || it.url.isBlank() }) {
+                throw IOException("${bookSource.name} returned invalid chapter entries; the existing chapter list was kept")
+            }
+            val chapters = sourceChapters
+                .asReversed()
+                .mapIndexed { index, chapter ->
+                    SChapter(
+                        url = chapter.url,
+                        name = chapter.title,
+                        chapterNumber = index + 1f
+                    )
+                }
+            db.mangaDao().update(manga.copy(initialized = true, lastUpdate = System.currentTimeMillis()))
+            return syncChapters(manga.id, chapters, trackUpdates = true)
+        }
         val source = ctx.app.sources.get(manga.source)
             ?: throw IOException("Source '${manga.source}' is not available")
         val input = SManga(
@@ -105,6 +129,12 @@ class MangaRepository(private val ctx: Context) {
             )
         )
         val chapters = source.getChapters(details)
+        if (chapters.isEmpty()) {
+            throw IOException("${source.name} returned no chapters; the existing chapter list was kept")
+        }
+        if (chapters.any { it.name.isBlank() || it.url.isBlank() }) {
+            throw IOException("${source.name} returned invalid chapter entries; the existing chapter list was kept")
+        }
         return syncChapters(manga.id, chapters, trackUpdates = true)
     }
 
@@ -119,6 +149,7 @@ class MangaRepository(private val ctx: Context) {
         val firstSync = existing.isEmpty()
         val now = System.currentTimeMillis()
         val toInsert = mutableListOf<ChapterEntity>()
+        val toUpdate = mutableListOf<ChapterEntity>()
         list.distinctBy { it.url }.forEachIndexed { index, c ->
             val number = if (c.chapterNumber >= 0f) c.chapterNumber else parseChapterNumber(c.name)
             val old = byUrl[c.url]
@@ -132,15 +163,28 @@ class MangaRepository(private val ctx: Context) {
                     )
                 )
             } else {
-                dao.updateMeta(old.id, index, c.name, c.dateUpload, number, c.scanlator)
+                toUpdate.add(
+                    old.copy(
+                        sourceOrder = index,
+                        name = c.name,
+                        dateUpload = c.dateUpload,
+                        chapterNumber = number,
+                        scanlator = c.scanlator
+                    )
+                )
             }
         }
         if (toInsert.isNotEmpty()) dao.insertAll(toInsert)
+        if (toUpdate.isNotEmpty()) dao.updateAll(toUpdate)
+        if (list.isNotEmpty() && db.mangaDao().getById(mangaId)?.source == LOCAL_SOURCE_ID) {
+            dao.deleteMissingForManga(mangaId, list.map { it.url }.distinct())
+        }
         return if (firstSync) 0 else toInsert.size
     }
 
     /** Refreshes every library entry (4 at a time). Returns the total number of new chapters. */
     suspend fun updateLibrary(onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }): Int = coroutineScope {
+        LocalScanner(ctx).scan()
         val favorites = db.mangaDao().getFavorites().filter { it.source != LOCAL_SOURCE_ID }
         val sem = Semaphore(4)
         val done = AtomicInteger(0)
