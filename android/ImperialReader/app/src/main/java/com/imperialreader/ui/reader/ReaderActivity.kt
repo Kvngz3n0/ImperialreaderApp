@@ -10,6 +10,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -29,6 +30,7 @@ import com.imperialreader.data.AppPrefs
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.network.CloudflareException
+import com.imperialreader.ui.common.StarSpriteView
 import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
@@ -59,6 +61,9 @@ class ReaderActivity : AppCompatActivity() {
     private lateinit var title: TextView
     private lateinit var subtitle: TextView
     private lateinit var btnMode: MaterialButton
+    private lateinit var nextChapterPrompt: LinearLayout
+    private lateinit var nextChapterStar: StarSpriteView
+    private lateinit var nextChapterMessage: TextView
     private lateinit var gesture: GestureDetector
 
     private var manga: MangaEntity? = null
@@ -71,8 +76,8 @@ class ReaderActivity : AppCompatActivity() {
     private var mode = AppPrefs.READER_RTL
     private var overlaysVisible = false
     private var restoring = false
+    private var chapterTransitionActive = false
     private var loadJob: Job? = null
-    private var autoAdvanceFromChapterId = -1L
 
     private val pagerMode get() = mode != AppPrefs.READER_VERTICAL
     private val rtl get() = mode == AppPrefs.READER_RTL
@@ -95,6 +100,9 @@ class ReaderActivity : AppCompatActivity() {
         title = findViewById(R.id.readerTitle)
         subtitle = findViewById(R.id.readerSubtitle)
         btnMode = findViewById(R.id.btnMode)
+        nextChapterPrompt = findViewById(R.id.nextChapterPrompt)
+        nextChapterStar = findViewById(R.id.nextChapterStar)
+        nextChapterMessage = findViewById(R.id.nextChapterMessage)
 
         mode = app.prefs.readerMode
         if (app.prefs.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -116,6 +124,7 @@ class ReaderActivity : AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnPrevCh).setOnClickListener { openAdjacent(-1) }
         findViewById<ImageButton>(R.id.btnNextCh).setOnClickListener { openAdjacent(1) }
         btnMode.setOnClickListener { showModeDialog() }
+        nextChapterPrompt.setOnClickListener { openAdjacent(1) }
 
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
@@ -138,8 +147,31 @@ class ReaderActivity : AppCompatActivity() {
                 val lastVisible = lm.findLastVisibleItemPosition()
                 val pos = if (lastVisible == pages.lastIndex) lastVisible else lm.findFirstVisibleItemPosition()
                 if (pos >= 0) onPageChanged(pos)
+                updateNextChapterPrompt()
             }
         })
+        var pulledNextChapter = false
+        val webtoonPullGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (e1 == null || e2.rawY >= e1.rawY || webtoon.canScrollVertically(1) ||
+                    index >= chapters.lastIndex || pages.isEmpty()
+                ) return false
+                webtoon.stopScroll()
+                pulledNextChapter = true
+                openAdjacent(1)
+                return true
+            }
+        })
+        webtoon.setOnTouchListener { _, event ->
+            webtoonPullGesture.onTouchEvent(event)
+            val consume = event.actionMasked == MotionEvent.ACTION_UP && pulledNextChapter
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                pulledNextChapter = false
+            }
+            consume
+        }
 
         gesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
@@ -166,7 +198,6 @@ class ReaderActivity : AppCompatActivity() {
     // ------------------------------------------------------------------ loading
 
     private fun loadChapter(chapterId: Long, startPage: Int?) {
-        val previousChapterId = currentChapterId
         currentChapterId = chapterId
         loadJob?.cancel()
         loadJob = lifecycleScope.launch {
@@ -176,9 +207,9 @@ class ReaderActivity : AppCompatActivity() {
                 val ch = chapterDao.getById(chapterId) ?: throw IOException("Chapter not found")
                 val m = app.db.mangaDao().getById(ch.mangaId) ?: throw IOException("Manga not found")
                 manga = m
+                mode = app.prefs.readerModeFor(m.id)
                 chapters = chapterDao.getAll(m.id).sortedByDescending { it.sourceOrder }
                 index = chapters.indexOfFirst { it.id == chapterId }.coerceAtLeast(0)
-                if (chapterId != previousChapterId) autoAdvanceFromChapterId = -1L
                 val current = chapters[index]
                 title.text = m.title
                 subtitle.text = current.name
@@ -208,9 +239,13 @@ class ReaderActivity : AppCompatActivity() {
     private fun showLoading() {
         progressBar.visibility = View.VISIBLE
         errorView.visibility = View.GONE
+        if (!chapterTransitionActive) hideNextChapterPrompt()
     }
 
     private fun showError(e: Exception) {
+        chapterTransitionActive = false
+        nextChapterMessage.text = "Pull up to read next chapter"
+        hideNextChapterPrompt()
         progressBar.visibility = View.GONE
         pager.visibility = View.GONE
         webtoon.visibility = View.GONE
@@ -258,6 +293,7 @@ class ReaderActivity : AppCompatActivity() {
         btnMode.text = modeLabel()
         currentPage = start
         updatePageUi(start)
+        webtoon.post { updateNextChapterPrompt() }
         root.postDelayed({ restoring = false }, 500)
     }
 
@@ -270,14 +306,26 @@ class ReaderActivity : AppCompatActivity() {
         if (restoring) return
 
         val ch = chapters.getOrNull(index) ?: return
-        val isLast = position >= pages.lastIndex
-        val read = ch.read || isLast
+        val reachedEnd = position >= pages.lastIndex && (pagerMode || !webtoon.canScrollVertically(1))
+        val read = ch.read || reachedEnd
         chapters = chapters.mapIndexed { i, c -> if (i == index) c.copy(lastPageRead = position, read = read) else c }
         lifecycleScope.launch { app.db.chapterDao().saveProgress(ch.id, position, read) }
-        if (isLast && index < chapters.lastIndex && autoAdvanceFromChapterId != ch.id) {
-            autoAdvanceFromChapterId = ch.id
-            loadChapter(chapters[index + 1].id, 0)
+    }
+
+    private fun updateNextChapterPrompt() {
+        val show = !pagerMode && pages.isNotEmpty() && index < chapters.lastIndex &&
+            !webtoon.canScrollVertically(1) && errorView.visibility != View.VISIBLE
+        if (show) {
+            nextChapterPrompt.visibility = View.VISIBLE
+            nextChapterStar.start()
+        } else {
+            hideNextChapterPrompt()
         }
+    }
+
+    private fun hideNextChapterPrompt() {
+        nextChapterPrompt.visibility = View.GONE
+        nextChapterStar.stop()
     }
 
     private fun updatePageUi(position: Int) {
@@ -309,6 +357,16 @@ class ReaderActivity : AppCompatActivity() {
             toast(if (delta > 0) "No next chapter" else "No previous chapter")
             return
         }
+        chapterTransitionActive = true
+        nextChapterMessage.text = "Opening chapter..."
+        nextChapterPrompt.visibility = View.VISIBLE
+        nextChapterStar.start()
+        nextChapterPrompt.postDelayed({
+            chapterTransitionActive = false
+            nextChapterMessage.text = "Pull up to read next chapter"
+            hideNextChapterPrompt()
+        }, 500)
+        if (!pagerMode) webtoon.stopScroll()
         loadChapter(chapters[target].id, if (delta < 0) Int.MAX_VALUE else 0)
     }
 
@@ -390,7 +448,7 @@ class ReaderActivity : AppCompatActivity() {
             .setTitle("Reading mode")
             .setSingleChoiceItems(arrayOf("Left to right", "Right to left", "Vertical (webtoon)"), mode) { dialog, which ->
                 mode = which
-                app.prefs.readerMode = which
+                manga?.let { app.prefs.setReaderModeFor(it.id, which) }
                 dialog.dismiss()
                 if (pages.isNotEmpty()) applyPages(currentPage)
             }

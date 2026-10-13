@@ -21,6 +21,15 @@ class AppPrefs(context: Context) {
         get() = sp.getString("reader_mode", "1")?.toIntOrNull() ?: READER_RTL
         set(v) = sp.edit { putString("reader_mode", v.toString()) }
 
+    fun readerModeFor(mangaId: Long): Int =
+        sp.getString("reader_mode_$mangaId", null)?.toIntOrNull()
+            ?.takeIf { it in READER_LTR..READER_VERTICAL }
+            ?: readerMode
+
+    fun setReaderModeFor(mangaId: Long, mode: Int) {
+        sp.edit { putString("reader_mode_$mangaId", mode.toString()) }
+    }
+
     val keepScreenOn: Boolean get() = sp.getBoolean("keep_screen_on", true)
     val fullscreen: Boolean get() = sp.getBoolean("fullscreen", true)
     val tapNavigation: Boolean get() = sp.getBoolean("tap_navigation", true)

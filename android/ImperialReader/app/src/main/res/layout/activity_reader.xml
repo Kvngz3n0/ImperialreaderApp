@@ -10,6 +10,22 @@
         android:id="@+id/webtoon"
         android:layout_width="match_parent" android:layout_height="match_parent"
         android:visibility="gone"/>
+    <LinearLayout android:id="@+id/nextChapterPrompt"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="96dp"
+        android:background="@drawable/bg_overlay" android:gravity="center"
+        android:orientation="horizontal" android:paddingStart="16dp" android:paddingEnd="16dp"
+        android:paddingTop="8dp" android:paddingBottom="8dp" android:clickable="true"
+        android:focusable="true" android:visibility="gone">
+        <com.imperialreader.ui.common.StarSpriteView
+            android:id="@+id/nextChapterStar"
+            android:layout_width="36dp" android:layout_height="36dp"/>
+        <TextView
+            android:id="@+id/nextChapterMessage"
+            android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginStart="8dp" android:text="Pull up to read next chapter"
+            android:textColor="@color/white" android:textSize="14sp"/>
+    </LinearLayout>
     <ProgressBar android:id="@+id/readerProgress"
         android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:layout_gravity="center"/>
