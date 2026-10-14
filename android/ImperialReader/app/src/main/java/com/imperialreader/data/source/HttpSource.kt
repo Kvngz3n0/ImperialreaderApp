@@ -44,14 +44,16 @@ abstract class HttpSource : Source {
             val request = builder.build()
             client.await(request).use { resp ->
                 val text = resp.body?.string().orEmpty()
+                val cfChallenge = resp.header("cf-mitigated")?.equals("challenge", ignoreCase = true) == true
                 if (!resp.isSuccessful) {
                     val cf = resp.header("Server")?.contains("cloudflare", true) == true ||
                         resp.header("cf-ray") != null
-                    if (cf && (resp.code == 403 || resp.code == 503)) {
+                    if (cfChallenge || (cf && (resp.code == 403 || resp.code == 503))) {
                         throw CloudflareException(request.url.toString())
                     }
                     throw HttpStatusException(resp.code, request.url.toString())
                 }
+                if (cfChallenge) throw CloudflareException(request.url.toString())
                 text
             }
         }

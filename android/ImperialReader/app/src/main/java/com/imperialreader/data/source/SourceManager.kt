@@ -23,24 +23,17 @@ class SourceManager(private val context: Context) {
         // Confirmed against the live site: WordPress + MangaThemesia (/manga/?order=update, chapters at /<slug>-chapter-N/)
         MangaThemesiaSource("KingOfShojo", "https://kingofshojo.com"),
         WordPressSource("Toonily", "https://toonily.com", nsfw = true),
-        WordPressSource("ManhuaPlus", "https://manhuaplus.com"),
-        WordPressSource("1stKissManga", "https://1stkissmanga.me"),
-        WordPressSource("MangaClash", "https://mangaclash.com"),
         WordPressSource("LuminousScans", "https://luminous-scans.com"),
-        WordPressSource("FlameScans", "https://flamescans.org"),
-        WordPressSource("DrakeComic", "https://drakecomic.net"),
-        WordPressSource("NightScans", "https://night-scans.com"),
-        WordPressSource("AresManga", "https://aresmanga.com"),
+        NightScanSource(),
         WordPressSource(
             "PhiliaScans",
             "https://philiascans.org",
             idOverride = "wp_philiascans_com"
         ),
         WordPressSource("RavenScans", "https://ravenscans.com"),
-        WordPressSource("StoneScape", "https://stonescape.xyz"),
+        StoneScapeSource(),
         WordPressSource("Cocomics", "https://cocomics.com"),
         WordPressSource("RokariComics", "https://rokaricomics.com"),
-        WordPressSource("MangaSY", "https://mangasy.com"),
         // Added on request (engine is auto-detected; sites without a known engine use the generic scraper)
         Manhwa18Source(),
         DemonicScansSource(),
@@ -49,20 +42,15 @@ class SourceManager(private val context: Context) {
         HentaraSource(),
         WordPressSource("Manga18 Club", "https://manga18.club", nsfw = true),
         Manga18Source("Manga18 ME", "https://manga18.me"),
-        WordPressSource("GetComics", "https://getcomics.org"),
         MangaFireSource(),
         // Western comics
         WordPressSource("ReadAllComics", "https://readallcomics.com"),
         WordPressSource("ReadComicsOnline", "https://readcomicsonline.ru"),
         WordPressSource("ComicExtra", "https://comicextra.net"),
         WordPressSource("XOXOComics", "https://xoxocomics.net"),
-        WordPressSource("RizzComics", "https://rizzfables.com"),
-        WordPressSource("CosmicScans", "https://cosmicscans.com"),
         WordPressSource("TritiniaScans", "https://tritinia.org"),
         WordPressSource("VortexScans", "https://vortexscans.org"),
         // 18+ (hidden until enabled in Settings)
-        WordPressSource("Hiperdex", "https://hiperdex.com", nsfw = true),
-        WordPressSource("Manytoon", "https://manytoon.com", nsfw = true),
         WordPressSource("ManhuaUS", "https://manhuaus.com", nsfw = true)
     )
 

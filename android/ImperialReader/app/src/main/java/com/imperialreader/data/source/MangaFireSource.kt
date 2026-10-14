@@ -35,7 +35,10 @@ class MangaFireSource : HttpSource() {
         val pageNumber = page.coerceAtLeast(1)
         val encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8.name()).replace("+", "%20")
         val vrf = MangaFireVrf.generate(query)
-        return list("$baseUrl/filter?keyword=$encodedQuery&vrf=$vrf&language%5B%5D=en&page=$pageNumber", pageNumber)
+        return list(
+            "$baseUrl/filter?keyword=$encodedQuery&vrf=$vrf&sort=most_relevance&language%5B%5D=en&page=$pageNumber",
+            pageNumber
+        )
     }
 
     private suspend fun list(url: String, page: Int): MangasPage {

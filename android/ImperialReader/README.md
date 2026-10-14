@@ -82,8 +82,9 @@ More → Storage folder → pick the folder → More → Scan local library. Alt
 Built in:
 
 * **KingOfShojo** (https://kingofshojo.com) uses the MangaThemesia engine directly (site structure confirmed live; it also carries some mature titles).
-* **Dedicated scrapers:** MangaDex (official API, most reliable), **Thunderscans** (catalog search, comics browsing, unlocked chapters, and embedded reader images confirmed against the live site), **Manhwa18** (live chapter images and listings), **DemonicScans**, **MangaFire** (AJAX chapters and page lists), **Hentara**, **Manga18.ME**, **AsuraScans**, **MangaKatana** (URL patterns confirmed against the live site), **MangaPill** and **MangaBuddy** (written from the sites' known layouts, not verified live).
-* **WordPress sites (auto-detecting):** each one looks at the site's home page the first time you use it and picks the **Madara**, **MangaThemesia**, or generic site engine automatically. Toonily, ManhuaPlus, 1stKissManga, MangaClash, LuminousScans, FlameScans, DrakeScans, NightScans, AresManga, PhiliaScans (philiascans.org), RavenScans, StoneScape, Cocomics, RokariComics, MangaSY, ManhwaRead, Manga18.club, RizzComics, CosmicScans, TritiniaScans, VortexScans.
+* **Dedicated scrapers:** MangaDex (official API, most reliable), **Thunderscans** (catalog search, comics browsing, unlocked chapters, and embedded reader images confirmed against the live site), **Manhwa18** (live chapter images and listings), **DemonicScans**, **MangaFire** (filter search, AJAX chapters and page lists), **NightScan** (public catalog API, English chapters, and reader pages), **Hentara**, **Manga18.ME**, **AsuraScans**, **MangaKatana** (URL patterns confirmed against the live site), **MangaPill** and **MangaBuddy** (written from the sites' known layouts, not verified live).
+* **StoneScape** uses its public catalog API for series listings, search, chapters, and reader pages.
+* **WordPress sites (auto-detecting):** each one looks at the site's home page the first time you use it and picks the **Madara**, **MangaThemesia**, or generic site engine automatically. Toonily, LuminousScans, PhiliaScans (philiascans.org), RavenScans, Cocomics, RokariComics, ManhwaRead, Manga18.club, TritiniaScans, VortexScans.
 
 Scanlation domains change or die constantly and several sit behind Cloudflare, so expect some to fail. Long-press a source in *Browse → Sources* to disable it, or use **Add custom source** to add any WordPress manga site by URL (Madara or MangaThemesia is detected for you). Custom sources are included in manual and automatic backups and are queried by Global search just like built-in sources. A site on any other engine needs its own small class: copy `MangaKatanaSource.kt` as the template.
 
@@ -102,7 +103,7 @@ Scanlation domains change or die constantly and several sit behind Cloudflare, s
 ## 18+ content
 
 * Off by default. Turn on **Settings → Browse → Show 18+ sources and extensions** (an age confirmation appears).
-* When on, 18+ sources appear in Browse and Global search (marked "18+"): Toonily, Hiperdex, Manytoon, ManhuaUS, Manhwa18, Hentara, Manga18.club, Manga18.ME — and **MangaDex also starts returning its erotica / pornographic-rated titles** (official API, the most reliable adult source here).
+* When on, 18+ sources appear in Browse and Global search (marked "18+"): Toonily, NightScan, ManhuaUS, Manhwa18, Hentara, Manga18.club, Manga18.ME — and **MangaDex also starts returning its erotica / pornographic-rated titles** (official API, the most reliable adult source here).
 * Turning it off hides them again; entries already in your library keep working.
 
 ### Sites not available as built-in scrapers
@@ -115,9 +116,7 @@ They exist as Mihon extensions in the Extensions tab, but this app cannot run ex
 
 * **Mihon/Keiyoushi APK extensions are not supported.** The Extensions tab now lists EPUB / web-novel catalogs instead. Imperial Reader does not execute Tachiyomi extension code.
 * **RAR5** archives (newer WinRAR default) can't be read; the app tells you to re-save as CBZ. RAR 2–4 works.
-* **ManhwaRead**, **Manga18.club**, **DemonicScans**, and **MangaFire** may require a Cloudflare check. If a request is blocked, open the source site in the in-app browser and complete its challenge before retrying; the dedicated scrapers report request or parse errors instead of presenting empty chapter placeholders.
-* **DrakeComic** is wired to its real address (drakecomic.net, `/series/comic/<slug>`), but paid / coin-locked chapters can't be read.
-* **GetComics** is a download-link blog, not a page reader; browsing works, reading will not.
+* **ManhwaRead**, **Manga18.club**, **DemonicScans**, and **MangaFire** may require a Cloudflare check. If a request is blocked, open the source site in the in-app browser and complete its challenge before retrying.
 * **Novel site addresses** in `BookSources.kt` are from memory and several are guesses (Bright Novel, Chikari, Luxon Scan, Novel Phoenix, Ranovel, ScrollersPub). Wattpad and Scribblehub need their own APIs/requests, so the generic reader may fail there. Anna's Archive was left out: it is an index of pirated downloads, not a readable source.
 * No pinch-zoom in the paged reader yet (fit-to-screen only).
 * Download queue is in memory: if Android kills the app mid-queue, re-queue the remaining chapters.
