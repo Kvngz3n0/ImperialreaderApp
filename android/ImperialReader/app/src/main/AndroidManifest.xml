@@ -35,6 +35,7 @@
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|smallestScreenSize"/>
         <activity android:name=".ui.reader.EpubReaderActivity" android:exported="false"/>
         <activity android:name=".ui.more.SettingsActivity" android:exported="false"/>
+        <activity android:name=".ui.security.AppLockActivity" android:exported="false"/>
         <activity android:name=".ui.webview.WebViewActivity" android:exported="false"/>
 
         <service

@@ -78,6 +78,24 @@
             app:iconSpaceReserved="false"/>
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Security" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat
+            android:key="app_lock_enabled"
+            android:title="Lock app"
+            android:summary="Require your device PIN or biometrics when returning to Imperial Reader"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="app_lock_timeout"
+            android:title="Lock after leaving"
+            android:summary="Choose how long Imperial Reader can stay in the background before locking"
+            android:entries="@array/app_lock_timeout_names"
+            android:entryValues="@array/app_lock_timeout_values"
+            android:defaultValue="0"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Advanced" app:iconSpaceReserved="false">
         <Preference
             android:key="clear_cache"

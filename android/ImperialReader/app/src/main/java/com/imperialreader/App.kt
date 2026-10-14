@@ -11,6 +11,7 @@ import com.imperialreader.data.network.NetworkHelper
 import com.imperialreader.data.repo.MangaRepository
 import com.imperialreader.data.source.SourceManager
 import com.imperialreader.data.storage.StorageManager
+import com.imperialreader.security.AppLockManager
 
 /**
  * Application class. Acts as a tiny manual dependency container
@@ -25,10 +26,12 @@ class App : Application(), ImageLoaderFactory {
     val sources by lazy { SourceManager(this) }
     val repo by lazy { MangaRepository(this) }
     val downloads by lazy { DownloadManager(this) }
+    val appLockManager by lazy { AppLockManager(this) }
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        registerActivityLifecycleCallbacks(appLockManager)
         AutomaticBackupScheduler.schedule(this)
     }
 

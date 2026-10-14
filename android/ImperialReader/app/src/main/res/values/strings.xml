@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Imperial Reader</string>
+    <string name="app_lock_title">Imperial Reader locked</string>
+    <string name="app_lock_prompt">Unlock with your device PIN or biometrics</string>
+    <string name="app_lock_unlock">Unlock</string>
+    <string name="app_lock_authentication_failed">Authentication not recognized. Try again.</string>
 </resources>

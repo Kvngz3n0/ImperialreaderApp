@@ -83,6 +83,18 @@ class AppPrefs(context: Context) {
     val showDownloadBadge: Boolean get() = sp.getBoolean("badge_download", true)
     val refreshOnStart: Boolean get() = sp.getBoolean("refresh_on_start", false)
 
+    var appLockEnabled: Boolean
+        get() = sp.getBoolean("app_lock_enabled", false)
+        set(value) = sp.edit { putBoolean("app_lock_enabled", value) }
+
+    var appLockTimeoutMillis: Long
+        get() = sp.getString("app_lock_timeout", "0")?.toLongOrNull() ?: 0L
+        set(value) = sp.edit { putString("app_lock_timeout", value.toString()) }
+
+    var appLockBackgroundAt: Long
+        get() = sp.getLong("app_lock_background_at", 0L)
+        set(value) = sp.edit { putLong("app_lock_background_at", value) }
+
     /** Extract and keep refreshing covers of local entries (from cover.jpg, archives, EPUBs). */
     val localCovers: Boolean get() = sp.getBoolean("local_covers", true)
 

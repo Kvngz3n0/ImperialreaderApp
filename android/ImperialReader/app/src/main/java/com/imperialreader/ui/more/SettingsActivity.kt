@@ -1,10 +1,13 @@
 package com.imperialreader.ui.more
 
+import android.app.KeyguardManager
 import android.os.Bundle
 import android.webkit.CookieManager
 import androidx.appcompat.app.AppCompatActivity
+import androidx.biometric.BiometricManager
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
+import androidx.preference.ListPreference
 import androidx.preference.SwitchPreferenceCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.appbar.MaterialToolbar
@@ -32,6 +35,18 @@ class SettingsActivity : AppCompatActivity() {
                 ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName
             }.getOrNull() ?: "1.0.0"
 
+            val appLockTimeout = findPreference<ListPreference>("app_lock_timeout")
+            appLockTimeout?.isEnabled = findPreference<SwitchPreferenceCompat>("app_lock_enabled")?.isChecked == true
+            findPreference<SwitchPreferenceCompat>("app_lock_enabled")?.setOnPreferenceChangeListener { _, newValue ->
+                if (newValue == true && !hasDeviceAuthentication(ctx)) {
+                    ctx.toast("Set up a screen lock or biometric on your device before enabling app lock")
+                    false
+                } else {
+                    appLockTimeout?.isEnabled = newValue == true
+                    true
+                }
+            }
+
             findPreference<SwitchPreferenceCompat>("show_nsfw_ext")?.setOnPreferenceChangeListener { pref, newValue ->
                 if (newValue == true) {
                     MaterialAlertDialogBuilder(ctx)
@@ -55,6 +70,14 @@ class SettingsActivity : AppCompatActivity() {
                 ctx.toast("Cookies cleared")
                 true
             }
+        }
+
+        private fun hasDeviceAuthentication(context: android.content.Context): Boolean {
+            val hasSecureScreenLock = (context.getSystemService(android.content.Context.KEYGUARD_SERVICE) as KeyguardManager)
+                .isDeviceSecure
+            val hasBiometrics = BiometricManager.from(context)
+                .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) == BiometricManager.BIOMETRIC_SUCCESS
+            return hasSecureScreenLock || hasBiometrics
         }
     }
 }

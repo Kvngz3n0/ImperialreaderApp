@@ -64,6 +64,7 @@ class MangaDetailsActivity : AppCompatActivity() {
     private val reversed = MutableStateFlow(false)
     private val selectedChapterIds = linkedSetOf<Long>()
     private var chapterSelectionMode = false
+    private var chapterSelectionAnchorId: Long? = null
 
     private lateinit var toolbar: MaterialToolbar
     private lateinit var swipe: SwipeRefreshLayout
@@ -99,7 +100,10 @@ class MangaDetailsActivity : AppCompatActivity() {
                 else startActivity(ReaderActivity.intent(this, row.chapter.id))
             },
             onLong = { row, anchor ->
-                if (chapterSelectionMode) toggleChapterSelection(row.chapter.id)
+                if (chapterSelectionMode) {
+                    chapterSelectionAnchorId?.let { selectChapterRange(it, row.chapter.id) }
+                        ?: toggleChapterSelection(row.chapter.id)
+                }
                 else showChapterMenu(row, anchor)
             },
             onDownload = { row -> onDownloadClick(row) }
@@ -128,6 +132,11 @@ class MangaDetailsActivity : AppCompatActivity() {
                         if (rev) mapped.reversed() else mapped
                     }.collect { list ->
                         selectedChapterIds.retainAll(list.map { it.chapter.id }.toSet())
+                        if (chapterSelectionAnchorId == null ||
+                            chapterSelectionAnchorId !in selectedChapterIds
+                        ) {
+                            chapterSelectionAnchorId = selectedChapterIds.firstOrNull()
+                        }
                         rows = list
                         chapterAdapter.submitList(list)
                         manga?.let { headerAdapter.update(it, list.size) }
@@ -293,8 +302,30 @@ class MangaDetailsActivity : AppCompatActivity() {
 
     private fun toggleChapterSelection(chapterId: Long) {
         if (!chapterSelectionMode) chapterSelectionMode = true
-        if (!selectedChapterIds.add(chapterId)) selectedChapterIds.remove(chapterId)
-        if (selectedChapterIds.isEmpty()) chapterSelectionMode = false
+        if (!selectedChapterIds.add(chapterId)) {
+            selectedChapterIds.remove(chapterId)
+            if (chapterSelectionAnchorId == chapterId) {
+                chapterSelectionAnchorId = selectedChapterIds.firstOrNull()
+            }
+        } else if (chapterSelectionAnchorId == null) {
+            chapterSelectionAnchorId = chapterId
+        }
+        if (selectedChapterIds.isEmpty()) {
+            chapterSelectionMode = false
+            chapterSelectionAnchorId = null
+        }
+        renderChapterSelection()
+    }
+
+    private fun selectChapterRange(anchorId: Long, chapterId: Long) {
+        val anchorPosition = rows.indexOfFirst { it.chapter.id == anchorId }
+        val chapterPosition = rows.indexOfFirst { it.chapter.id == chapterId }
+        if (anchorPosition < 0 || chapterPosition < 0) return
+
+        val firstPosition = minOf(anchorPosition, chapterPosition)
+        val lastPosition = maxOf(anchorPosition, chapterPosition)
+        rows.subList(firstPosition, lastPosition + 1)
+            .mapTo(selectedChapterIds) { it.chapter.id }
         renderChapterSelection()
     }
 
@@ -302,13 +333,20 @@ class MangaDetailsActivity : AppCompatActivity() {
         val ids = rows.map { it.chapter.id }
         if (ids.isNotEmpty() && ids.all { it in selectedChapterIds }) selectedChapterIds.removeAll(ids.toSet())
         else selectedChapterIds.addAll(ids)
-        if (selectedChapterIds.isEmpty()) chapterSelectionMode = false
+        if (chapterSelectionAnchorId == null || chapterSelectionAnchorId !in selectedChapterIds) {
+            chapterSelectionAnchorId = selectedChapterIds.firstOrNull()
+        }
+        if (selectedChapterIds.isEmpty()) {
+            chapterSelectionMode = false
+            chapterSelectionAnchorId = null
+        }
         renderChapterSelection()
     }
 
     private fun clearChapterSelection() {
         chapterSelectionMode = false
         selectedChapterIds.clear()
+        chapterSelectionAnchorId = null
         renderChapterSelection()
     }
 
@@ -408,6 +446,7 @@ class MangaDetailsActivity : AppCompatActivity() {
             if (item.itemId == 0) {
                 chapterSelectionMode = true
                 selectedChapterIds.add(c.id)
+                if (chapterSelectionAnchorId == null) chapterSelectionAnchorId = c.id
                 renderChapterSelection()
                 return@setOnMenuItemClickListener true
             }

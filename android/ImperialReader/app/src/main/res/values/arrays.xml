@@ -22,4 +22,16 @@
         <item>4</item>
         <item>5</item>
     </string-array>
+    <string-array name="app_lock_timeout_names">
+        <item>Immediately</item>
+        <item>After 1 minute</item>
+        <item>After 5 minutes</item>
+        <item>After 15 minutes</item>
+    </string-array>
+    <string-array name="app_lock_timeout_values">
+        <item>0</item>
+        <item>60000</item>
+        <item>300000</item>
+        <item>900000</item>
+    </string-array>
 </resources>
