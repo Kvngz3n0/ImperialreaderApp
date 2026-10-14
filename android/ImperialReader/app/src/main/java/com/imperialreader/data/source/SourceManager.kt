@@ -41,13 +41,14 @@ class SourceManager(private val context: Context) {
         WordPressSource("MangaSY", "https://mangasy.com"),
         // Added on request (engine is auto-detected; sites without a known engine use the generic scraper)
         Manhwa18Source(),
+        DemonicScansSource(),
         AsuraScansSource(),
         WordPressSource("ManhwaRead", "https://manhwaread.com"),
         HentaraSource(),
         WordPressSource("Manga18 Club", "https://manga18.club", nsfw = true),
         Manga18Source("Manga18 ME", "https://manga18.me"),
         WordPressSource("GetComics", "https://getcomics.org"),
-        WordPressSource("MangaFire", "https://mangafire.to"),
+        MangaFireSource(),
         // Western comics
         WordPressSource("ReadAllComics", "https://readallcomics.com"),
         WordPressSource("ReadComicsOnline", "https://readcomicsonline.ru"),

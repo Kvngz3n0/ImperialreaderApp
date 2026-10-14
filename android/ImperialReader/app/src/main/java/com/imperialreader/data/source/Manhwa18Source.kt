@@ -14,53 +14,36 @@ class Manhwa18Source : HttpSource() {
     override val baseUrl = "https://manhwa18.cc"
     override val nsfw = true
 
-    private val genericReader = GenericSource(name, baseUrl, nsfw = true)
-
     override suspend fun getPopular(page: Int): MangasPage =
-        if (page <= 1) {
-            val doc = Jsoup.parse(getString("$baseUrl/"), baseUrl)
-            val items = parseMangaCards(doc, "div.hot-item")
-            if (items.isEmpty()) throw IOException("Manhwa18 returned no readable popular titles")
-            MangasPage(items, false)
-        } else {
-            MangasPage(emptyList(), false)
-        }
+        list("$baseUrl/webtoons${if (page > 1) "/$page" else ""}?orderby=trending", page, "div.manga-item")
 
     override suspend fun getLatest(page: Int): MangasPage =
-        if (page <= 1) {
-            val doc = Jsoup.parse(getString("$baseUrl/webtoons"), "$baseUrl/webtoons")
-            val items = parseMangaCards(doc, "div.manga-item")
-            if (items.isEmpty()) throw IOException("Manhwa18 returned no readable titles")
-            MangasPage(items, false)
-        } else {
-            MangasPage(emptyList(), false)
-        }
+        list("$baseUrl/webtoons${if (page > 1) "/$page" else ""}?orderby=latest", page, "div.manga-item")
 
     override suspend fun search(query: String, page: Int): MangasPage =
-        list("$baseUrl/search?q=${enc(query)}&page=$page")
+        list("$baseUrl/search?q=${enc(query)}&page=$page", page, "div.manga-item")
 
-    private suspend fun list(url: String): MangasPage {
+    private suspend fun list(url: String, page: Int, selector: String): MangasPage {
         val doc = try {
             Jsoup.parse(getString(url), url)
         } catch (e: HttpStatusException) {
-            if (e.code == 404 && url.substringAfterLast("page=").toIntOrNull()?.let { it > 1 } == true) {
+            if (e.code == 404 && page > 1) {
                 return MangasPage(emptyList(), false)
             }
             throw e
         }
-        val items = parseMangaCards(doc, "div.manga-item")
-        val requestedPage = Regex("""[?&]page=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-        if (items.isEmpty() && requestedPage == 1) {
+        val items = parseMangaCards(doc, selector)
+        if (items.isEmpty() && page <= 1) {
             throw IOException("Manhwa18 returned no readable search results")
         }
         val hasNext = doc.select("a[href]").any { a ->
             val target = runCatching { URI(a.absUrl("href")) }.getOrNull() ?: return@any false
-            val targetPage = target.rawQuery.orEmpty()
-                .split('&')
-                .firstOrNull { it.startsWith("page=") }
-                ?.substringAfter('=')
-                ?.toIntOrNull()
-            target.path == "/search" && targetPage != null && targetPage > requestedPage
+            val targetPage = target.path.trimEnd('/').substringAfterLast('/').toIntOrNull()
+                ?: target.rawQuery.orEmpty().split('&')
+                    .firstOrNull { it.startsWith("page=") }
+                    ?.substringAfter('=')
+                    ?.toIntOrNull()
+            targetPage != null && targetPage > page
         }
         return MangasPage(items, hasNext && items.isNotEmpty())
     }
@@ -122,5 +105,10 @@ class Manhwa18Source : HttpSource() {
         return chapters.sortedByDescending { it.chapterNumber }
     }
 
-    override suspend fun getPages(chapter: SChapter): List<String> = genericReader.getPages(chapter)
+    override suspend fun getPages(chapter: SChapter): List<String> {
+        val doc = Jsoup.parse(getString(chapter.url), chapter.url)
+        val pages = doc.select(".read-content img").mapNotNull(::lazyImage).distinct()
+        if (pages.isEmpty()) throw IOException("Manhwa18 returned no readable pages for this chapter")
+        return pages
+    }
 }

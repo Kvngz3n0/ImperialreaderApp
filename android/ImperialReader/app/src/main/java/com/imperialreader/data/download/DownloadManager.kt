@@ -1,12 +1,15 @@
 package com.imperialreader.data.download
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import androidx.documentfile.provider.DocumentFile
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.book.BookSources
 import com.imperialreader.data.book.NovelChapterEpub
 import com.imperialreader.data.source.SChapter
+import com.imperialreader.data.source.MangaFirePageTransform
 import com.imperialreader.data.source.SManga
 import com.imperialreader.util.app
 import com.imperialreader.util.mimeForExt
@@ -214,7 +217,8 @@ class DownloadManager(private val ctx: Context) {
                 ctx.app.network.client.newCall(request).execute().use { resp ->
                     if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
                     val ct = resp.header("Content-Type").orEmpty()
-                    val ext = when {
+                    val scrambleOffset = MangaFirePageTransform.offset(url)
+                    val ext = if (scrambleOffset != null) "jpg" else when {
                         "png" in ct -> "png"
                         "webp" in ct -> "webp"
                         "gif" in ct -> "gif"
@@ -226,7 +230,21 @@ class DownloadManager(private val ctx: Context) {
                     created = file
                     val out = ctx.contentResolver.openOutputStream(file.uri, "w")
                         ?: throw IOException("Cannot open file for writing")
-                    out.use { resp.body!!.byteStream().copyTo(it) }
+                    out.use {
+                        if (scrambleOffset == null) {
+                            resp.body!!.byteStream().copyTo(it)
+                        } else {
+                            val bytes = resp.body!!.bytes()
+                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                ?: throw IOException("Could not decode a MangaFire page image")
+                            val transformed = MangaFirePageTransform.unscramble(bitmap, scrambleOffset)
+                            if (!transformed.compress(Bitmap.CompressFormat.JPEG, 95, it)) {
+                                throw IOException("Could not save the decoded MangaFire page image")
+                            }
+                            if (transformed !== bitmap) transformed.recycle()
+                            bitmap.recycle()
+                        }
+                    }
                 }
                 return
             } catch (e: CancellationException) {

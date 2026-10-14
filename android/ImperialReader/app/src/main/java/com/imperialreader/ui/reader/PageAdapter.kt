@@ -1,5 +1,6 @@
 package com.imperialreader.ui.reader
 
+import android.graphics.Bitmap
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -8,6 +9,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
+import coil.size.Size
+import coil.transform.Transformation
+import com.imperialreader.data.source.MangaFirePageTransform
 import com.imperialreader.util.dp
 
 /**
@@ -76,6 +80,7 @@ class PageAdapter(
         h.progress.visibility = View.VISIBLE
         h.image.load(url) {
             headers.forEach { (k, v) -> addHeader(k, v) }
+            MangaFirePageTransform.offset(url)?.let { transformations(MangaFireImageTransformation(it)) }
             listener(
                 onSuccess = { _, _ ->
                     h.progress.visibility = View.GONE
@@ -89,6 +94,13 @@ class PageAdapter(
                 }
             )
         }
+    }
+
+    private class MangaFireImageTransformation(private val offset: Int) : Transformation {
+        override val cacheKey = "mangafire-scramble-$offset"
+
+        override suspend fun transform(input: Bitmap, size: Size): Bitmap =
+            MangaFirePageTransform.unscramble(input, offset)
     }
 
     override fun onViewRecycled(holder: VH) {
