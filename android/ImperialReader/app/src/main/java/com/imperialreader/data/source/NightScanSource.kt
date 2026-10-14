@@ -62,14 +62,30 @@ class NightScanSource : HttpSource() {
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val id = resolveSeriesId(manga.url)
         val slug = seriesSlug(manga.url)
+        val englishChapters = fetchChapters(id, slug, ENGLISH_LANGUAGE_ID)
+        val chapters = if (englishChapters.isNotEmpty()) {
+            englishChapters
+        } else {
+            fetchChapters(id, slug, languageId = null).distinctBy { it.url }
+        }
+        if (chapters.isEmpty()) throw IOException("NightScan returned no readable chapters")
+        return chapters.sortedByDescending { it.chapterNumber }
+    }
+
+    private suspend fun fetchChapters(
+        seriesId: String,
+        slug: String,
+        languageId: Int?
+    ): List<SChapter> {
         val chapters = mutableListOf<SChapter>()
         var page = 1
         var hasNext: Boolean
         do {
+            val languageFilter = languageId?.let { "&where[language][equals]=$it" }.orEmpty()
             val json = JSONObject(
                 getString(
-                    "$baseUrl/api/chapter-translations?where[chapter.series][equals]=$id" +
-                        "&where[language][equals]=1&where[status][equals]=published" +
+                    "$baseUrl/api/chapter-translations?where[chapter.series][equals]=$seriesId" +
+                        "$languageFilter&where[status][equals]=published" +
                         "&sort=-chapter.chapterNumber&page=$page&limit=$PAGE_SIZE&depth=1"
                 )
             )
@@ -94,9 +110,7 @@ class NightScanSource : HttpSource() {
             hasNext = json.optBoolean("hasNextPage")
             page++
         } while (hasNext)
-
-        if (chapters.isEmpty()) throw IOException("NightScan returned no readable English chapters")
-        return chapters.sortedByDescending { it.chapterNumber }
+        return chapters
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {
@@ -161,5 +175,6 @@ class NightScanSource : HttpSource() {
 
     private companion object {
         const val PAGE_SIZE = 100
+        const val ENGLISH_LANGUAGE_ID = 1
     }
 }
