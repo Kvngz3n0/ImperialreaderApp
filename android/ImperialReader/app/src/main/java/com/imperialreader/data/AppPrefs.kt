@@ -9,6 +9,19 @@ class AppPrefs(context: Context) {
 
     val sp: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
+    init {
+        val migratedInterval = when (sp.getString("automatic_cover_refresh_interval", null)) {
+            "6" -> "360"
+            "12" -> "720"
+            "24" -> "1440"
+            "168" -> "10080"
+            else -> null
+        }
+        if (migratedInterval != null) {
+            sp.edit { putString("automatic_cover_refresh_interval", migratedInterval) }
+        }
+    }
+
     companion object {
         const val READER_LTR = 0
         const val READER_RTL = 1
@@ -82,6 +95,13 @@ class AppPrefs(context: Context) {
     val showUnreadBadge: Boolean get() = sp.getBoolean("badge_unread", true)
     val showDownloadBadge: Boolean get() = sp.getBoolean("badge_download", true)
     val refreshOnStart: Boolean get() = sp.getBoolean("refresh_on_start", false)
+    val automaticCoverRefresh: Boolean get() = sp.getBoolean("automatic_cover_refresh", false)
+    val automaticCoverRefreshIntervalMinutes: Long
+        get() = sp.getString("automatic_cover_refresh_interval", "1440")?.toLongOrNull()
+            ?.takeIf { it in setOf(0L, 30L, 60L, 360L, 720L, 1440L, 10080L) } ?: 1440L
+    var automaticCoverRefreshAt: Long
+        get() = sp.getLong("automatic_cover_refresh_at", 0L)
+        set(value) = sp.edit { putLong("automatic_cover_refresh_at", value) }
 
     var appLockEnabled: Boolean
         get() = sp.getBoolean("app_lock_enabled", false)

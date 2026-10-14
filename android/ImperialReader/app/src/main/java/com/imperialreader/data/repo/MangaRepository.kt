@@ -83,6 +83,29 @@ class MangaRepository(private val ctx: Context) {
         return newState
     }
 
+    /** Refreshes only an entry's cover, leaving chapter state untouched. */
+    suspend fun refreshCover(manga: MangaEntity): Boolean {
+        if (manga.source == LOCAL_SOURCE_ID || BookSources.get(manga.source) != null) return false
+        val source = ctx.app.sources.get(manga.source)
+            ?: throw IOException("Source '${manga.source}' is not available")
+        val details = source.getMangaDetails(
+            SManga(
+                url = manga.url,
+                title = manga.title,
+                thumbnailUrl = manga.coverUrl,
+                author = manga.author,
+                artist = manga.artist,
+                description = manga.description,
+                genre = manga.genre,
+                status = manga.status
+            )
+        )
+        val coverUrl = details.thumbnailUrl?.takeIf { it.isNotBlank() } ?: return false
+        if (coverUrl == manga.coverUrl) return false
+        db.mangaDao().update(manga.copy(coverUrl = coverUrl))
+        return true
+    }
+
     /** Re-fetches details + chapter list from the source. Returns the number of NEW chapters. */
     suspend fun refresh(manga: MangaEntity): Int {
         if (manga.source == LOCAL_SOURCE_ID) return 0

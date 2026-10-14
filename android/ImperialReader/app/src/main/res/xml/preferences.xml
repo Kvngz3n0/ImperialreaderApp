@@ -60,6 +60,23 @@
             app:iconSpaceReserved="false"/>
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Library cover refresh" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat
+            android:key="automatic_cover_refresh"
+            android:title="Refresh entry covers automatically"
+            android:summary="Fetches the latest covers for library entries when the app opens"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="automatic_cover_refresh_interval"
+            android:title="Refresh frequency"
+            android:entries="@array/cover_refresh_interval_names"
+            android:entryValues="@array/cover_refresh_interval_values"
+            android:defaultValue="1440"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Local library" app:iconSpaceReserved="false">
         <SwitchPreferenceCompat
             android:key="local_covers"

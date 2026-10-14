@@ -12,6 +12,7 @@ import androidx.preference.SwitchPreferenceCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.appbar.MaterialToolbar
 import com.imperialreader.R
+import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.util.toast
 
 class SettingsActivity : AppCompatActivity() {
@@ -45,6 +46,14 @@ class SettingsActivity : AppCompatActivity() {
                     appLockTimeout?.isEnabled = newValue == true
                     true
                 }
+            }
+
+            findPreference<SwitchPreferenceCompat>("automatic_cover_refresh")?.setOnPreferenceChangeListener { _, newValue ->
+                AutomaticCoverRefreshScheduler.onSettingChanged(ctx, enabled = newValue == true)
+                true
+            }
+            findPreference<ListPreference>("automatic_cover_refresh_interval")?.setOnPreferenceChangeListener { _, newValue ->
+                (newValue as? String)?.toLongOrNull() != null
             }
 
             findPreference<SwitchPreferenceCompat>("show_nsfw_ext")?.setOnPreferenceChangeListener { pref, newValue ->

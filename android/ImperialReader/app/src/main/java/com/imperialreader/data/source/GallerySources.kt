@@ -293,29 +293,23 @@ class XoxoComicSource : HttpSource() {
     override val baseUrl = "https://xoxocomic.com"
 
     override suspend fun getPopular(page: Int): MangasPage =
-        list(if (page <= 1) baseUrl else "$baseUrl/comic-list?page=$page")
+        list("$baseUrl/comic-list?page=${page.coerceAtLeast(1)}")
 
     override suspend fun getLatest(page: Int): MangasPage = getPopular(page)
 
     override suspend fun search(query: String, page: Int): MangasPage {
-        val suffix = if (page > 1) "&page=$page" else ""
-        return list("$baseUrl/search-comic?keyword=${enc(query)}$suffix")
+        val terms = comicSearchTerms(query)
+        if (terms.isEmpty()) return MangasPage(emptyList(), false)
+        val pageSuffix = if (page > 1) "&page=$page" else ""
+        val result = list("$baseUrl/search-comic?keyword=${enc(query.trim())}$pageSuffix")
+        val matches = result.mangas.filter { matchesComicQuery(it.title, terms) }
+        return MangasPage(matches, result.hasNextPage && matches.isNotEmpty())
     }
 
     private suspend fun list(url: String): MangasPage {
         val doc = Jsoup.parse(getString(url), url)
-        val items = doc.select("a[href]").asSequence()
-            .filter { a -> comicPath(a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) })?.matches(Regex("""^/comic/[^/]+/?$""")) == true }
-            .mapNotNull { a ->
-                val href = a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) }.trimEnd('/')
-                val title = a.attr("title").ifBlank {
-                    a.selectFirst("img")?.attr("alt").orEmpty().ifBlank { a.text() }
-                }
-                    .removeSuffix(" Comic").trim()
-                if (title.isBlank()) return@mapNotNull null
-                SManga(url = href, title = title, thumbnailUrl = imageUrl(a.selectFirst("img")))
-            }.distinctBy { it.url }.toList()
-        return MangasPage(items, items.isNotEmpty())
+        val items = parseComicCards(doc)
+        return MangasPage(items, hasNextPage(doc, url))
     }
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
@@ -331,18 +325,25 @@ class XoxoComicSource : HttpSource() {
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val doc = Jsoup.parse(getString(manga.url), manga.url)
+        val seriesPath = comicPath(manga.url)?.trimEnd('/')
+            ?.takeIf { it.matches(Regex("""^/comic/[^/]+$""", RegexOption.IGNORE_CASE)) }
+            ?: throw IOException("Invalid XOXO Comic series address")
+        val issuePattern = Regex(
+            """^${Regex.escape(seriesPath)}/(issue-([^/]+)|tpb)/?$""",
+            RegexOption.IGNORE_CASE
+        )
         val rows = doc.select("a[href]").asSequence()
-            .filter { a ->
-                val path = comicPath(a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) })
-                path != null && Regex("""^/comic/[^/]+/(?:issue-[^/]+|tpb)/?$""", RegexOption.IGNORE_CASE).matches(path)
-            }
             .mapNotNull { a ->
-                val url = a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) }.trimEnd('/')
-                val name = a.text().trim().ifBlank { a.attr("title").trim() }
-                    .ifBlank { url.substringAfterLast('/').replace('-', ' ').replaceFirstChar { it.uppercase() } }
+                val url = a.absUrl("href").ifBlank { absoluteUrl(a.attr("href")) }
+                val match = comicPath(url)?.let(issuePattern::matchEntire) ?: return@mapNotNull null
+                val issueSlug = match.groupValues[1]
+                val issueNumber = match.groupValues[2]
+                val name = issueTitle(a, issueNumber.ifBlank { null })
                 val number = Regex("""(?i)(?:issue|#)[\s-]*(\d+(?:\.\d+)?)""").find(name)
-                    ?.groupValues?.get(1)?.toFloatOrNull() ?: -1f
-                SChapter(url, name, chapterNumber = number)
+                    ?.groupValues?.get(1)?.toFloatOrNull()
+                    ?: issueSlug.removePrefix("issue-").toFloatOrNull()
+                    ?: -1f
+                SChapter(url.trimEnd('/'), name, chapterNumber = number)
             }.distinctBy { it.url }.toList()
         if (rows.isEmpty()) throw IOException("XOXO Comic did not return issue links for this series")
         return rows.sortedWith(
@@ -352,7 +353,8 @@ class XoxoComicSource : HttpSource() {
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {
-        val chapterPath = comicPath(chapter.url)
+        val chapterPath = comicPath(chapter.url)?.trimEnd('/')
+            ?.takeIf { Regex("""^/comic/[^/]+/(?:issue-[^/]+|tpb)$""", RegexOption.IGNORE_CASE).matches(it) }
             ?: throw IOException("Invalid XOXO Comic issue address")
         val pages = mutableListOf<String>()
         val visited = mutableSetOf<String>()
@@ -368,25 +370,19 @@ class XoxoComicSource : HttpSource() {
 
             val html = getString(pageUrl)
             val doc = Jsoup.parse(html, pageUrl)
-            val pageImages = doc.select("img#imgChapter, #imgChapter img, .reading-detail .page-chapter img, .page-chapter img, .reading img, .reader img")
+            val pageImages = doc.select(
+                "img#imgChapter, #imgChapter img, .reading-detail .page-chapter img, " +
+                    ".page-chapter img, .reading img, .reader img, img.chapter_img"
+            )
                 .asSequence()
                 .mapNotNull(::imageUrl)
-                .filterNot { it.contains("logo", true) || it.contains("loading", true) || it.contains("avatar", true) }
+                .filter(::isComicPageImage)
                 .distinct()
                 .toList()
-            val resolvedImages = if (pageImages.isNotEmpty()) pageImages else {
-                // Some XOXO reader templates put their page URLs in inline scripts instead of image tags.
-                Regex("""https?:\\?/\\?/[^\"'\s\\]+?\.(?:jpe?g|png|webp|avif)(?:\?[^\"'\s\\]*)?""", RegexOption.IGNORE_CASE)
-                    .findAll(html)
-                    .map { it.value.replace("\\/", "/") }
-                    .filterNot { it.contains("logo", true) || it.contains("loading", true) || it.contains("avatar", true) }
-                    .distinct()
-                    .toList()
-            }
-            if (resolvedImages.isEmpty()) {
+            if (pageImages.isEmpty()) {
                 throw IOException("XOXO Comic returned no reader image for issue page ${visited.size}")
             }
-            pages += resolvedImages
+            pages += pageImages
 
             val next = doc.selectFirst("a.next-page[href], a[rel=next][href]")
                 ?.absUrl("href")
@@ -416,6 +412,59 @@ class XoxoComicSource : HttpSource() {
     private companion object {
         const val MAX_ISSUE_PAGES = 500
     }
+
+    private fun parseComicCards(doc: Document): List<SManga> {
+        val candidates = doc.select("a[href]").asSequence().mapNotNull { link ->
+            val url = link.absUrl("href").ifBlank { absoluteUrl(link.attr("href")) }
+            val path = comicPath(url)?.trimEnd('/') ?: return@mapNotNull null
+            if (!path.matches(Regex("""^/comic/[^/]+$""", RegexOption.IGNORE_CASE))) return@mapNotNull null
+            val title = comicCardTitle(link) ?: return@mapNotNull null
+            SManga(url.trimEnd('/'), title, imageUrl(link.selectFirst("img")))
+        }.distinctBy { it.url }.toList()
+        if (candidates.isNotEmpty()) return candidates
+
+        val path = doc.selectFirst("link[rel=canonical]")?.attr("href")
+            ?.let(::comicPath)?.trimEnd('/') ?: return emptyList()
+        if (!path.matches(Regex("""^/comic/[^/]+$""", RegexOption.IGNORE_CASE))) return emptyList()
+        val title = doc.selectFirst("main h1, h1")?.text()?.trim()?.removeSuffix(" Comic")?.ifBlank { null }
+            ?: return emptyList()
+        return listOf(
+            SManga(
+                "$baseUrl$path",
+                title,
+                doc.selectFirst("meta[property=og:image]")?.attr("content")?.ifBlank { null }
+            )
+        )
+    }
+
+    private fun hasNextPage(doc: Document, currentUrl: String): Boolean {
+        val currentPage = queryParameterInt(currentUrl, "page") ?: 1
+        return doc.select("a[rel=next][href], .pagination a.next[href], .pagination a.r[href], a.next-page[href]")
+            .any { link ->
+                val next = link.absUrl("href")
+                val nextPage = queryParameterInt(next, "page")
+                next.isNotBlank() && next != currentUrl && (nextPage == null || nextPage > currentPage)
+            }
+    }
+
+    private fun comicCardTitle(link: Element): String? =
+        sequenceOf(link.attr("title"), link.selectFirst("img")?.attr("alt").orEmpty(), link.text())
+            .map { it.trim().removePrefix("Read ").removeSuffix(" Comic").trim() }
+            .firstOrNull { it.isNotBlank() && it.length < 180 }
+
+    private fun issueTitle(link: Element, number: String?): String {
+        val label = sequenceOf(link.attr("title"), link.text())
+            .map { it.trim() }
+            .firstOrNull {
+                it.isNotBlank() && it.length < 160 &&
+                    !it.matches(Regex("""(?i)(read|view|open|download)(\s+(now|online))?"""))
+            }
+        return label ?: if (number != null) "Issue #$number" else "TPB"
+    }
+
+    private fun isComicPageImage(url: String): Boolean =
+        !url.contains("logo", true) && !url.contains("loading", true) &&
+            !url.contains("avatar", true) && !url.contains("cover", true)
 }
 
 /** ComicHubFree serves traditional Western comic series and a full-page reader for each issue. */
@@ -426,36 +475,23 @@ class ComicHubFreeSource : HttpSource() {
     override val baseUrl = "https://comichubfree.com"
 
     override suspend fun getPopular(page: Int): MangasPage =
-        if (page <= 1) list(baseUrl) else list("$baseUrl/comic-list?page=$page")
+        list("$baseUrl/comic-list?page=${page.coerceAtLeast(1)}")
 
     override suspend fun getLatest(page: Int): MangasPage = getPopular(page)
 
-    override suspend fun search(query: String, page: Int): MangasPage =
-        list("$baseUrl/search-comic?key=${enc(query)}&page=$page")
+    override suspend fun search(query: String, page: Int): MangasPage {
+        val terms = comicSearchTerms(query)
+        if (terms.isEmpty()) return MangasPage(emptyList(), false)
+        val pageSuffix = if (page > 1) "&page=$page" else ""
+        val result = list("$baseUrl/search-comic?key=${enc(query.trim())}$pageSuffix")
+        val matches = result.mangas.filter { matchesComicQuery(it.title, terms) }
+        return MangasPage(matches, result.hasNextPage && matches.isNotEmpty())
+    }
 
     private suspend fun list(url: String): MangasPage {
         val doc = Jsoup.parse(getString(url), url)
-        val items = doc.select("a[href]").asSequence()
-            .mapNotNull { a ->
-                val href = a.absUrl("href")
-                val path = comicPath(href)
-                if (path == null || !path.matches(Regex("""^/comic/[^/]+/?$""", RegexOption.IGNORE_CASE))) {
-                    return@mapNotNull null
-                }
-                val img = a.selectFirst("img")
-                val title = a.attr("title").trim()
-                    .ifBlank { img?.attr("alt").orEmpty().trim() }
-                    .ifBlank { a.text().trim() }
-                    .removePrefix("Read ")
-                    .removeSuffix(" online")
-                    .removeSuffix(" Comic")
-                    .trim()
-                if (title.isBlank()) return@mapNotNull null
-                SManga(url = href.trimEnd('/'), title = title, thumbnailUrl = imageUrl(img))
-            }
-            .distinctBy { it.url }
-            .toList()
-        return MangasPage(items, items.isNotEmpty())
+        val items = parseComicCards(doc)
+        return MangasPage(items, hasNextPage(doc, url))
     }
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
@@ -516,12 +552,12 @@ class ComicHubFreeSource : HttpSource() {
             .mapNotNull { a ->
                 val url = a.absUrl("href")
                 val path = comicPath(url) ?: return@mapNotNull null
-                val match = Regex("""^/${Regex.escape(slug)}/issue-([^/]+)/?$""", RegexOption.IGNORE_CASE).matchEntire(path)
+                val match = Regex("""^/${Regex.escape(slug)}/issue-([^/]+)/?$""", RegexOption.IGNORE_CASE)
+                    .matchEntire(path)
                     ?: return@mapNotNull null
                 val issueNumber = match.groupValues[1]
-                val rawTitle = a.attr("title").trim().ifBlank { a.text().trim() }
-                val title = rawTitle.takeIf { Regex("""(?i)(issue|#)\s*#?\s*[\d.]+""").containsMatchIn(it) }
-                    ?: "$slug Issue #$issueNumber"
+                if (issueNumber.isBlank()) return@mapNotNull null
+                val title = issueTitle(a, issueNumber)
                 SChapter(url.trimEnd('/'), title, chapterNumber = issueNumber.toFloatOrNull() ?: -1f)
             }
             .toList()
@@ -532,8 +568,12 @@ class ComicHubFreeSource : HttpSource() {
             ?: throw IOException("Invalid ComicHubFree issue address")
         val allUrl = "$baseUrl${path.trimEnd('/')}/all"
         val doc = Jsoup.parse(getString(allUrl), allUrl)
-        val pages = doc.select("#imgChapter img.chapter_img, .chapter-container img.chapter_img")
+        val pages = doc.select(
+            "#imgChapter img.chapter_img, .chapter-container img.chapter_img, " +
+                "img#imgChapter, img.chapter_img, .reader-image img, .comic-image img"
+        )
             .mapNotNull(::imageUrl)
+            .filter(::isComicPageImage)
             .distinct()
         if (pages.isEmpty()) throw IOException("ComicHubFree returned no pages for this issue")
         return pages
@@ -550,7 +590,84 @@ class ComicHubFreeSource : HttpSource() {
     private companion object {
         const val MAX_ISSUE_LIST_PAGES = 250
     }
+
+    private fun parseComicCards(doc: Document): List<SManga> {
+        val candidates = doc.select("a[href]").asSequence().mapNotNull { link ->
+            val url = link.absUrl("href")
+            val path = comicPath(url)?.trimEnd('/') ?: return@mapNotNull null
+            if (!path.matches(Regex("""^/comic/[^/]+$""", RegexOption.IGNORE_CASE))) return@mapNotNull null
+            val title = comicCardTitle(link) ?: return@mapNotNull null
+            SManga(url.trimEnd('/'), title, imageUrl(link.selectFirst("img")))
+        }.distinctBy { it.url }.toList()
+        if (candidates.isNotEmpty()) return candidates
+
+        val path = doc.selectFirst("link[rel=canonical]")?.attr("href")
+            ?.let(::comicPath)?.trimEnd('/') ?: return emptyList()
+        if (!path.matches(Regex("""^/comic/[^/]+$""", RegexOption.IGNORE_CASE))) return emptyList()
+        val title = doc.selectFirst("main h1, h1")?.text()?.trim()
+            ?.removePrefix("Read ")?.removeSuffix(" Online for Free")?.ifBlank { null }
+            ?: return emptyList()
+        return listOf(
+            SManga(
+                "$baseUrl$path",
+                title,
+                doc.selectFirst("meta[property=og:image]")?.attr("content")?.ifBlank { null }
+            )
+        )
+    }
+
+    private fun hasNextPage(doc: Document, currentUrl: String): Boolean {
+        val currentPage = queryParameterInt(currentUrl, "page") ?: 1
+        return doc.select("a[rel=next][href], .pagination a.next[href], .pagination a.r[href], a.next-page[href]")
+            .any { link ->
+                val next = link.absUrl("href")
+                val nextPage = queryParameterInt(next, "page")
+                next.isNotBlank() && next != currentUrl && (nextPage == null || nextPage > currentPage)
+            }
+    }
+
+    private fun comicCardTitle(link: Element): String? =
+        sequenceOf(link.attr("title"), link.selectFirst("img")?.attr("alt").orEmpty(), link.text())
+            .map {
+                it.trim().removePrefix("Read ").removeSuffix(" online")
+                    .removeSuffix(" Online for Free").removeSuffix(" Comic").trim()
+            }
+            .firstOrNull { it.isNotBlank() && it.length < 180 }
+
+    private fun issueTitle(link: Element, number: String): String {
+        val label = sequenceOf(link.attr("title"), link.text())
+            .map { it.trim() }
+            .firstOrNull {
+                it.isNotBlank() && it.length < 160 &&
+                    !it.matches(Regex("""(?i)(read|view|open|download)(\s+(now|online))?"""))
+            }
+        return label ?: "Issue #$number"
+    }
+
+    private fun isComicPageImage(url: String): Boolean =
+        !url.contains("logo", true) && !url.contains("loading", true) &&
+            !url.contains("avatar", true) && !url.contains("cover", true)
 }
+
+private fun comicSearchTerms(query: String): List<String> =
+    Regex("""[\p{L}\p{N}]+""").findAll(query.lowercase())
+        .map { normalizeTitle(it.value) }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .toList()
+
+private fun matchesComicQuery(title: String, terms: List<String>): Boolean {
+    val normalized = normalizeTitle(title)
+    return terms.all(normalized::contains)
+}
+
+private fun queryParameterInt(url: String, name: String): Int? =
+    runCatching {
+        URI(url).rawQuery.orEmpty().split('&')
+            .firstOrNull { it.substringBefore('=') == name }
+            ?.substringAfter('=', "")
+            ?.toIntOrNull()
+    }.getOrNull()
 
 private fun imageUrl(img: Element?): String? {
     if (img == null) return null

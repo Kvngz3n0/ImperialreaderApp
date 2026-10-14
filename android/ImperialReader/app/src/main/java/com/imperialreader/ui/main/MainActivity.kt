@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.util.app
 import kotlinx.coroutines.launch
@@ -41,6 +42,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (savedInstanceState == null) {
             nav.selectedItemId = R.id.nav_library
+            AutomaticCoverRefreshScheduler.onAppStart(this)
         }
 
         if (app.prefs.localCovers && app.prefs.storageUri != null && !scannedThisProcess) {

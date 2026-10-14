@@ -120,13 +120,13 @@ class CombinedSource : Source {
         for (m in decode(manga.url)) {
             val source = App.instance.sources.get(m.sourceId) ?: continue
             try {
-                val d = source.getMangaDetails(SManga(url = m.url, title = manga.title, thumbnailUrl = manga.thumbnailUrl))
+                val d = source.getMangaDetails(SManga(url = m.url, title = manga.title))
+                if (!d.thumbnailUrl.isNullOrBlank()) manga.thumbnailUrl = d.thumbnailUrl
                 manga.description = d.description ?: manga.description
                 manga.author = d.author ?: manga.author
                 manga.artist = d.artist ?: manga.artist
                 manga.genre = d.genre ?: manga.genre
                 if (d.status != 0) manga.status = d.status
-                if (!d.description.isNullOrBlank()) return manga
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
