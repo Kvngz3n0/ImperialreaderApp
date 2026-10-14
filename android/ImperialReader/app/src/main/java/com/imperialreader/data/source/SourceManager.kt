@@ -18,12 +18,10 @@ class SourceManager(private val context: Context) {
         HentaiDbSource(),
         NhentaiXxxSource(),
         NineHentaiSource(),
-        XoxoComicSource(),
         ComicHubFreeSource(),
+        ReadComicsOnlineSource(),
         // Confirmed against the live site: WordPress + MangaThemesia (/manga/?order=update, chapters at /<slug>-chapter-N/)
         MangaThemesiaSource("KingOfShojo", "https://kingofshojo.com"),
-        WordPressSource("Toonily", "https://toonily.com", nsfw = true),
-        WordPressSource("LuminousScans", "https://luminous-scans.com"),
         NightScanSource(),
         WordPressSource(
             "PhiliaScans",
@@ -32,7 +30,7 @@ class SourceManager(private val context: Context) {
         ),
         WordPressSource("RavenScans", "https://ravenscans.com"),
         StoneScapeSource(),
-        WordPressSource("Cocomics", "https://cocomics.com"),
+        WordPressSource("Cocomic", "https://cocomic.co", idOverride = "wp_cocomics_com"),
         WordPressSource("RokariComics", "https://rokaricomics.com"),
         // Added on request (engine is auto-detected; sites without a known engine use the generic scraper)
         Manhwa18Source(),
@@ -40,14 +38,9 @@ class SourceManager(private val context: Context) {
         AsuraScansSource(),
         WordPressSource("ManhwaRead", "https://manhwaread.com"),
         HentaraSource(),
-        WordPressSource("Manga18 Club", "https://manga18.club", nsfw = true),
         Manga18Source("Manga18 ME", "https://manga18.me"),
         MangaFireSource(),
         // Western comics
-        WordPressSource("ReadAllComics", "https://readallcomics.com"),
-        WordPressSource("ReadComicsOnline", "https://readcomicsonline.ru"),
-        WordPressSource("ComicExtra", "https://comicextra.net"),
-        WordPressSource("XOXOComics", "https://xoxocomics.net"),
         WordPressSource("TritiniaScans", "https://tritinia.org"),
         WordPressSource("VortexScans", "https://vortexscans.org"),
         // 18+ (hidden until enabled in Settings)

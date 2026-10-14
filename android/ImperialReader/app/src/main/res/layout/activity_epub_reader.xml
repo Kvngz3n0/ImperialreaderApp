@@ -39,6 +39,9 @@
             android:id="@+id/btnTheme" style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Theme"/>
         <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnReadingMode" style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Scroll"/>
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/btnTts" style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Listen"/>
     </LinearLayout>

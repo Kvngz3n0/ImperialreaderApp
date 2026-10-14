@@ -4,10 +4,13 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.view.GestureDetector
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -39,6 +42,7 @@ import java.net.URLDecoder
 import java.util.Locale
 import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
+import kotlin.math.abs
 
 /** Minimal EPUB reader: unzips to cache, follows the OPF spine and shows each section in a WebView. */
 class EpubReaderActivity : AppCompatActivity() {
@@ -66,11 +70,15 @@ class EpubReaderActivity : AppCompatActivity() {
     private var switchingChapter = false
     private var transientEpubFile: File? = null
     private var readerTheme = 0
+    private var horizontalReading = false
+    private var pendingEndPosition = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var speaking = false
     private var resumeSpeaking = false
+    private lateinit var gesture: GestureDetector
     private lateinit var btnTts: com.google.android.material.button.MaterialButton
+    private lateinit var btnReadingMode: com.google.android.material.button.MaterialButton
 
     /** background, text, link colours: dark, sepia, light */
     private val themes = listOf(
@@ -81,12 +89,17 @@ class EpubReaderActivity : AppCompatActivity() {
 
     private fun applyTheme() {
         val (bg, fg, link) = themes[readerTheme]
+        val flow = if (horizontalReading) {
+            "html{height:100%;overflow-x:auto;overflow-y:hidden}body{height:100vh!important;overflow-x:auto;overflow-y:hidden;column-width:calc(100vw - 24px);column-gap:24px;column-fill:auto}"
+        } else {
+            "html{height:auto;overflow:auto}body{height:auto!important;overflow:auto;column-width:auto;column-gap:normal}"
+        }
         web.setBackgroundColor(Color.parseColor(bg))
         web.evaluateJavascript(
             "(function(){var s=document.getElementById('ir-style');if(!s){s=document.createElement('style');" +
                 "s.id='ir-style';document.head.appendChild(s);}" +
                 "s.innerHTML='html,body{background:$bg !important;color:$fg !important;padding:0 12px;line-height:1.65} " +
-                "a{color:$link !important} img{max-width:100% !important;height:auto}';})()", null
+                "a{color:$link !important} img{max-width:100% !important;height:auto} $flow';})()", null
         )
     }
 
@@ -177,6 +190,9 @@ class EpubReaderActivity : AppCompatActivity() {
         txtSection = findViewById(R.id.txtSection)
 
         readerTheme = app.prefs.sp.getInt("epub_theme", 0)
+        horizontalReading = app.prefs.sp.getBoolean("epub_horizontal_reading", false)
+        btnReadingMode = findViewById(R.id.btnReadingMode)
+        updateReadingModeButton()
         tts = TextToSpeech(this) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             if (ttsReady) tts?.language = Locale.getDefault()
@@ -187,6 +203,13 @@ class EpubReaderActivity : AppCompatActivity() {
             app.prefs.sp.edit().putInt("epub_theme", readerTheme).apply()
             applyTheme()
         }
+        btnReadingMode.setOnClickListener {
+            horizontalReading = !horizontalReading
+            app.prefs.sp.edit().putBoolean("epub_horizontal_reading", horizontalReading).apply()
+            updateReadingModeButton()
+            applyTheme()
+            web.evaluateJavascript("window.scrollTo(0,0)", null)
+        }
         btnTts.setOnClickListener { if (speaking) stopSpeaking() else startSpeaking() }
         web.settings.javaScriptEnabled = true
         web.settings.allowFileAccess = true
@@ -194,6 +217,10 @@ class EpubReaderActivity : AppCompatActivity() {
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String?) {
                 applyTheme()
+                if (horizontalReading && pendingEndPosition) {
+                    pendingEndPosition = false
+                    view.evaluateJavascript("window.scrollTo(document.documentElement.scrollWidth,0)", null)
+                }
                 if (resumeSpeaking) {
                     resumeSpeaking = false
                     view.postDelayed({ startSpeaking() }, 500)
@@ -206,6 +233,18 @@ class EpubReaderActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnSmaller).setOnClickListener { setZoom(zoom - 10) }
         findViewById<View>(R.id.btnLarger).setOnClickListener { setZoom(zoom + 10) }
         txtSection.setOnClickListener { showContents() }
+        gesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDown(e: MotionEvent) = true
+
+            override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
+                if (e1 == null || !isInsideWeb(e1)) return false
+                val dx = e2.rawX - e1.rawX
+                val dy = e2.rawY - e1.rawY
+                if (abs(dx) < 48 * resources.displayMetrics.density || abs(dx) <= abs(dy)) return false
+                handleSwipe(if (dx < 0) 1 else -1)
+                return true
+            }
+        })
 
         lifecycleScope.launch {
             try {
@@ -242,6 +281,45 @@ class EpubReaderActivity : AppCompatActivity() {
     private fun setZoom(value: Int) {
         zoom = value.coerceIn(60, 220)
         web.settings.textZoom = zoom
+    }
+
+    private fun updateReadingModeButton() {
+        btnReadingMode.text = if (horizontalReading) "Left to right" else "Scroll"
+    }
+
+    private fun isInsideWeb(event: MotionEvent): Boolean {
+        val bounds = Rect()
+        return web.getGlobalVisibleRect(bounds) && bounds.contains(event.rawX.toInt(), event.rawY.toInt())
+    }
+
+    private fun handleSwipe(direction: Int) {
+        if (!horizontalReading) {
+            if (epubChapterIndex in epubChapters.indices) {
+                val target = epubChapterIndex + direction
+                if (target in epubChapters.indices) {
+                    openAdjacentChapter(target, if (direction > 0) 0 else Int.MAX_VALUE)
+                }
+            } else {
+                moveSection(direction)
+            }
+            return
+        }
+
+        val edge = if (direction > 0) {
+            "x + window.innerWidth >= Math.max(root.scrollWidth, body.scrollWidth) - 2"
+        } else {
+            "x <= 2"
+        }
+        web.evaluateJavascript(
+            "(function(){var root=document.documentElement,body=document.body;var x=window.scrollX||root.scrollLeft||body.scrollLeft;return $edge;})()"
+        ) { atEdge ->
+            if (atEdge == "true") moveSection(direction)
+        }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (::gesture.isInitialized) gesture.onTouchEvent(event)
+        return super.dispatchTouchEvent(event)
     }
 
     private fun show(i: Int) {
@@ -293,6 +371,7 @@ class EpubReaderActivity : AppCompatActivity() {
                 chapterId = target.id
                 epubChapterIndex = targetIndex
                 book = loaded
+                pendingEndPosition = startSection == Int.MAX_VALUE
                 findViewById<MaterialToolbar>(R.id.toolbar).title = manga?.title ?: loaded.title
                 app.repo.recordHistory(target.id)
                 val section = if (startSection == Int.MAX_VALUE) loaded.spine.lastIndex else startSection

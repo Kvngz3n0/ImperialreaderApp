@@ -552,7 +552,7 @@ class ComicHubFreeSource : HttpSource() {
             .mapNotNull { a ->
                 val url = a.absUrl("href")
                 val path = comicPath(url) ?: return@mapNotNull null
-                val match = Regex("""^/${Regex.escape(slug)}/issue-([^/]+)/?$""", RegexOption.IGNORE_CASE)
+                val match = Regex("""^/(?:comic/)?${Regex.escape(slug)}/issue-([^/]+)/?$""", RegexOption.IGNORE_CASE)
                     .matchEntire(path)
                     ?: return@mapNotNull null
                 val issueNumber = match.groupValues[1]
@@ -564,7 +564,7 @@ class ComicHubFreeSource : HttpSource() {
 
     override suspend fun getPages(chapter: SChapter): List<String> {
         val path = comicPath(chapter.url)
-            ?.takeIf { Regex("""^/[^/]+/issue-[^/]+/?$""", RegexOption.IGNORE_CASE).matches(it) }
+            ?.takeIf { Regex("""^/(?:comic/)?[^/]+/issue-[^/]+/?$""", RegexOption.IGNORE_CASE).matches(it) }
             ?: throw IOException("Invalid ComicHubFree issue address")
         val allUrl = "$baseUrl${path.trimEnd('/')}/all"
         val doc = Jsoup.parse(getString(allUrl), allUrl)
