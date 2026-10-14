@@ -11,10 +11,11 @@ class WordPressSource(
     override val name: String,
     override val baseUrl: String,
     override val lang: String = "en",
-    override val nsfw: Boolean = false
+    override val nsfw: Boolean = false,
+    idOverride: String? = null
 ) : HttpSource() {
 
-    override val id: String = "wp_" + hostId(baseUrl, name)
+    override val id: String = idOverride ?: "wp_" + hostId(baseUrl, name)
 
     @Volatile
     private var cached: Source? = null

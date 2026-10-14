@@ -66,12 +66,22 @@ class GenericSource(
 
     private suspend fun discoverList(page: Int, latest: Boolean): MangasPage {
         val known = if (latest) latestPattern ?: listPattern else listPattern
-        if (known != null) return cardsOf(page, known)
+        if (known != null) {
+            val result = cardsOf(page, known)
+            if (result.mangas.isNotEmpty() || page > 1) return result
+            if (latest && latestPattern != null && known == latestPattern) latestPattern = null else listPattern = null
+        }
         val candidates = if (latest) latestCandidates + listCandidates else listCandidates
         var last: Exception? = null
+        var fallbackPattern: String? = null
+        var fallbackResult: MangasPage? = null
         for (c in candidates) {
             try {
                 val result = cardsOf(1, c)
+                if (result.mangas.isNotEmpty() && fallbackResult == null) {
+                    fallbackPattern = c
+                    fallbackResult = result
+                }
                 if (result.mangas.size >= 4) {
                     if (latest && c in latestCandidates) latestPattern = c else listPattern = c
                     return if (page == 1) result else cardsOf(page, c)
@@ -81,6 +91,11 @@ class GenericSource(
             } catch (e: Exception) {
                 last = e
             }
+        }
+        if (fallbackResult != null) {
+            val pattern = fallbackPattern!!
+            if (latest && pattern in latestCandidates) latestPattern = pattern else listPattern = pattern
+            return if (page == 1) fallbackResult else cardsOf(page, pattern)
         }
         throw last ?: IOException("No series listing found on this site")
     }

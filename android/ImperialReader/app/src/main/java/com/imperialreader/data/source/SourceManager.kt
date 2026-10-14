@@ -30,10 +30,12 @@ class SourceManager(private val context: Context) {
         WordPressSource("FlameScans", "https://flamescans.org"),
         WordPressSource("DrakeComic", "https://drakecomic.net"),
         WordPressSource("NightScans", "https://night-scans.com"),
-        WordPressSource("ResetScans", "https://reset-scans.com"),
         WordPressSource("AresManga", "https://aresmanga.com"),
-        WordPressSource("Firescans", "https://firescans.org"),
-        WordPressSource("PhiliaScans", "https://philiascans.com"),
+        WordPressSource(
+            "PhiliaScans",
+            "https://philiascans.org",
+            idOverride = "wp_philiascans_com"
+        ),
         WordPressSource("RavenScans", "https://ravenscans.com"),
         WordPressSource("StoneScape", "https://stonescape.xyz"),
         WordPressSource("Cocomics", "https://cocomics.com"),

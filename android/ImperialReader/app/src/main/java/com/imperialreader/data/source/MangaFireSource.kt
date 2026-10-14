@@ -40,19 +40,27 @@ class MangaFireSource : HttpSource() {
 
     private suspend fun list(url: String, page: Int): MangasPage {
         val doc = Jsoup.parse(getString(url), url)
-        val mangas = doc.select(".original.card-lg .unit .inner").mapNotNull { card ->
-            val link = card.selectFirst(".info > a[href]") ?: return@mapNotNull null
-            val title = link.ownText().trim().ifBlank { link.text().trim() }
-            if (title.isBlank()) return@mapNotNull null
-            SManga(
-                url = link.absUrl("href"),
-                title = title,
-                thumbnailUrl = lazyImage(card.selectFirst("img"))
-            )
+        val mangas = doc.select(".original .unit .inner, .unit .inner").mapNotNull { card ->
+            val link = card.selectFirst(".info > a[href], .info a[href], a.name[href], a[href*=/manga/]")
+                ?: return@mapNotNull null
+            parseManga(link, card.selectFirst("img"))
+        }.ifEmpty {
+            doc.select("a[href*=/manga/]").mapNotNull { link ->
+                parseManga(link, link.selectFirst("img") ?: link.parent()?.selectFirst("img"))
+            }
         }.distinctBy { it.url }
         if (mangas.isEmpty() && page <= 1) throw IOException("MangaFire returned no readable titles")
-        val hasNext = doc.selectFirst(".page-item.active + .page-item .page-link") != null
+        val hasNext = doc.selectFirst(".page-item.active + .page-item .page-link, a[rel=next]") != null
         return MangasPage(mangas, hasNext && mangas.isNotEmpty())
+    }
+
+    private fun parseManga(link: Element, image: Element?): SManga? {
+        val url = link.absUrl("href").ifBlank { absoluteUrl(link.attr("href")) }
+        if (url.isBlank() || !url.contains("/manga/")) return null
+        val title = link.ownText().trim().ifBlank { link.text().trim() }
+            .ifBlank { image?.attr("alt")?.trim().orEmpty() }
+        if (title.isBlank()) return null
+        return SManga(url = url, title = title, thumbnailUrl = lazyImage(image))
     }
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
