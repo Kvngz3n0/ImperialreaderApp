@@ -23,6 +23,7 @@ class SourceManager(private val context: Context) {
         // Confirmed against the live site: WordPress + MangaThemesia (/manga/?order=update, chapters at /<slug>-chapter-N/)
         MangaThemesiaSource("KingOfShojo", "https://kingofshojo.com"),
         NightScanSource(),
+        WitchToonsSource(),
         WordPressSource(
             "PhiliaScans",
             "https://philiascans.org",

@@ -53,9 +53,11 @@ class NightScanSource : HttpSource() {
         manga.author = json.optJSONArray("creators")?.let(::names)?.ifBlank { null }
         manga.genre = json.optJSONArray("genres")?.let(::names)?.ifBlank { null }
         manga.status = statusFromText(json.optString("status"))
-        val doc = Jsoup.parse(getString(manga.url), manga.url)
-        manga.thumbnailUrl = doc.selectFirst("meta[property=og:image]")?.attr("content")
-            ?.takeIf { it.isNotBlank() } ?: manga.thumbnailUrl
+        if (json.optBoolean("isAdult")) {
+            val doc = Jsoup.parse(getString(manga.url), manga.url)
+            manga.thumbnailUrl = doc.selectFirst("meta[property=og:image]")?.attr("content")
+                ?.takeIf { it.isNotBlank() } ?: manga.thumbnailUrl
+        }
         return manga
     }
 
