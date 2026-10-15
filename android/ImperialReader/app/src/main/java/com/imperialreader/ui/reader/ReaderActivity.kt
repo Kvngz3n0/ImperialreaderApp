@@ -220,6 +220,11 @@ class ReaderActivity : AppCompatActivity() {
                         finish()
                         return@launch
                     }
+                    is LoadedChapter.Pdf -> {
+                        startActivity(PdfReaderActivity.intent(this@ReaderActivity, current.id, loaded.uri))
+                        finish()
+                        return@launch
+                    }
                     is LoadedChapter.Images -> {
                         pages = loaded.pages
                         headers = loaded.headers

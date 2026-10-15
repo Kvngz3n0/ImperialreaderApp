@@ -10,7 +10,7 @@
     <EditText android:id="@+id/queryInput"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:layout_marginStart="12dp" android:layout_marginEnd="12dp" android:layout_marginTop="4dp"
-        android:hint="Search all sources and EPUBs"
+        android:hint="Search all sources, books and web novels"
         android:imeOptions="actionSearch" android:inputType="text" android:maxLines="1"
         android:importantForAutofill="no"
         android:textColor="@color/on_surface" android:textColorHint="@color/on_surface_variant"/>

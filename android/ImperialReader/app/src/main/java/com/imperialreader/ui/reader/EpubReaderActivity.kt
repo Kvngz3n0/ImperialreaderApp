@@ -14,7 +14,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.JavascriptInterface
 import android.widget.TextView
+import android.widget.SeekBar
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
@@ -60,6 +62,7 @@ class EpubReaderActivity : AppCompatActivity() {
 
     private lateinit var web: WebView
     private lateinit var txtSection: TextView
+    private lateinit var sectionProgress: SeekBar
     private var book: Book? = null
     private var index = 0
     private var zoom = 100
@@ -72,6 +75,8 @@ class EpubReaderActivity : AppCompatActivity() {
     private var readerTheme = 0
     private var horizontalReading = false
     private var pendingEndPosition = false
+    private var pendingResumePage = 0
+    private var seekingProgress = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var speaking = false
@@ -188,6 +193,21 @@ class EpubReaderActivity : AppCompatActivity() {
         toolbar.setNavigationOnClickListener { finish() }
         web = findViewById(R.id.web)
         txtSection = findViewById(R.id.txtSection)
+        sectionProgress = findViewById(R.id.sectionProgress)
+        sectionProgress.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {}
+            override fun onStartTrackingTouch(seekBar: SeekBar) {
+                seekingProgress = true
+            }
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                seekingProgress = false
+                if (book?.spine?.size == 1) {
+                    scrollToPage(seekBar.progress)
+                } else {
+                    show(seekBar.progress)
+                }
+            }
+        })
 
         readerTheme = app.prefs.sp.getInt("epub_theme", 0)
         horizontalReading = app.prefs.sp.getBoolean("epub_horizontal_reading", false)
@@ -214,12 +234,49 @@ class EpubReaderActivity : AppCompatActivity() {
         web.settings.javaScriptEnabled = true
         web.settings.allowFileAccess = true
         web.settings.textZoom = zoom
+        web.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun onProgress(page: Int, total: Int) {
+                runOnUiThread {
+                    val currentBook = book ?: return@runOnUiThread
+                    if (isFinishing || isDestroyed || total <= 0) return@runOnUiThread
+                    if (currentBook.spine.size == 1) {
+                        sectionProgress.max = (total - 1).coerceAtLeast(0)
+                        if (!seekingProgress) sectionProgress.progress = page.coerceIn(0, sectionProgress.max)
+                    } else if (!seekingProgress) {
+                        sectionProgress.progress = index
+                    }
+                    txtSection.text = "Page ${page + 1}/$total • ${currentBook.titles[index]}"
+                    val storedPage = if (currentBook.spine.size == 1) page else index
+                    val atEnd = index == currentBook.spine.lastIndex && page >= total - 1
+                    lifecycleScope.launch {
+                        val dao = app.db.chapterDao()
+                        val current = dao.getById(chapterId) ?: return@launch
+                        dao.saveProgress(chapterId, storedPage, current.read || atEnd)
+                    }
+                }
+            }
+        }, "ImperialReaderProgress")
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String?) {
                 applyTheme()
-                if (horizontalReading && pendingEndPosition) {
+                if (pendingEndPosition || pendingResumePage > 0) {
+                    val resumeAtEnd = pendingEndPosition
+                    val page = pendingResumePage
                     pendingEndPosition = false
-                    view.evaluateJavascript("window.scrollTo(document.documentElement.scrollWidth,0)", null)
+                    pendingResumePage = 0
+                    val scrollPosition = if (resumeAtEnd) "total-1" else page.toString()
+                    val x = if (horizontalReading) "p*dim" else "0"
+                    val y = if (horizontalReading) "0" else "p*dim"
+                    view.evaluateJavascript(
+                        "(function(){var r=document.documentElement,b=document.body;" +
+                            "var dim=${if (horizontalReading) "window.innerWidth" else "window.innerHeight"};" +
+                            "var total=Math.max(1,Math.ceil((${if (horizontalReading) "Math.max(r.scrollWidth,b.scrollWidth)" else "Math.max(r.scrollHeight,b.scrollHeight)"})/dim));" +
+                            "var p=Math.min($scrollPosition,total-1);" +
+                            "window.scrollTo($x,$y);})()"
+                    ) { installProgressReporter(view) }
+                } else {
+                    installProgressReporter(view)
                 }
                 if (resumeSpeaking) {
                     resumeSpeaking = false
@@ -267,8 +324,13 @@ class EpubReaderActivity : AppCompatActivity() {
                     }
                     epubChapterIndex = epubChapters.indexOfFirst { it.id == chapter.id }
                 }
+                if (chapter != null && !chapter.read && loaded.spine.size == 1) {
+                    pendingResumePage = chapter.lastPageRead
+                }
                 app.repo.recordHistory(chapterId)
-                show(if (chapter != null && !chapter.read) chapter.lastPageRead else 0)
+                val startSection = if (loaded.spine.size == 1) 0
+                else if (chapter != null && !chapter.read) chapter.lastPageRead else 0
+                show(startSection)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -285,6 +347,27 @@ class EpubReaderActivity : AppCompatActivity() {
 
     private fun updateReadingModeButton() {
         btnReadingMode.text = if (horizontalReading) "Left to right" else "Scroll"
+    }
+
+    private fun scrollToPage(page: Int) {
+        val x = if (horizontalReading) "$page*window.innerWidth" else "0"
+        val y = if (horizontalReading) "0" else "$page*window.innerHeight"
+        web.evaluateJavascript("window.scrollTo($x,$y)", null)
+    }
+
+    private fun installProgressReporter(view: WebView) {
+        val extent = if (horizontalReading) "Math.max(root.scrollWidth,body.scrollWidth)" else "Math.max(root.scrollHeight,body.scrollHeight)"
+        val offset = if (horizontalReading) "window.scrollX||root.scrollLeft||body.scrollLeft" else "window.scrollY||root.scrollTop||body.scrollTop"
+        val dimension = if (horizontalReading) "window.innerWidth" else "window.innerHeight"
+        view.evaluateJavascript(
+            "(function(){if(window.__irProgressTimer)clearInterval(window.__irProgressTimer);" +
+                "var root=document.documentElement,body=document.body,last=-1,totalLast=-1;" +
+                "function report(){var dim=Math.max(1,$dimension);var total=Math.max(1,Math.ceil($extent/dim));" +
+                "var page=Math.min(total-1,Math.max(0,Math.floor(($offset)/dim)));" +
+                "if(page!==last||total!==totalLast){last=page;totalLast=total;ImperialReaderProgress.onProgress(page,total);}}" +
+                "window.__irProgressTimer=setInterval(report,300);report();})()",
+            null
+        )
     }
 
     private fun isInsideWeb(event: MotionEvent): Boolean {
@@ -327,14 +410,10 @@ class EpubReaderActivity : AppCompatActivity() {
         if (i !in b.spine.indices) return
         if (!resumeSpeaking) stopSpeaking()
         index = i
+        sectionProgress.max = (b.spine.size - 1).coerceAtLeast(0)
+        sectionProgress.progress = i
         web.loadUrl(Uri.fromFile(b.spine[i]).toString())
-        txtSection.text = "${i + 1}/${b.spine.size} • ${b.titles[i]}"
-        val last = i == b.spine.lastIndex
-        lifecycleScope.launch {
-            val dao = app.db.chapterDao()
-            val current = dao.getById(chapterId) ?: return@launch
-            dao.saveProgress(chapterId, i, current.read || last)
-        }
+        txtSection.text = "Page ${i + 1}/${b.spine.size} • ${b.titles[i]}"
     }
 
     private fun moveSection(direction: Int) {
@@ -372,6 +451,7 @@ class EpubReaderActivity : AppCompatActivity() {
                 epubChapterIndex = targetIndex
                 book = loaded
                 pendingEndPosition = startSection == Int.MAX_VALUE
+                pendingResumePage = 0
                 findViewById<MaterialToolbar>(R.id.toolbar).title = manga?.title ?: loaded.title
                 app.repo.recordHistory(target.id)
                 val section = if (startSection == Int.MAX_VALUE) loaded.spine.lastIndex else startSection

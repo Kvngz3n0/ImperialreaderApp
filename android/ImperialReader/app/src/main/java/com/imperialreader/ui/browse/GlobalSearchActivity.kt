@@ -9,6 +9,7 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -107,6 +108,8 @@ class GlobalSearchActivity : AppCompatActivity() {
     private val hits = LinkedHashMap<String, List<SManga>>()
     private val stats = HashMap<String, GroupStats>()
     private var currentQuery = ""
+    private var genreFilter = ""
+    private var artistFilter = ""
     private var searchJob: Job? = null
 
     private lateinit var emptyText: TextView
@@ -118,7 +121,15 @@ class GlobalSearchActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_global_search)
 
-        findViewById<MaterialToolbar>(R.id.toolbar).setNavigationOnClickListener { finish() }
+        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar.setNavigationOnClickListener { finish() }
+        toolbar.inflateMenu(R.menu.global_search_menu)
+        toolbar.setOnMenuItemClickListener { item ->
+            if (item.itemId == R.id.action_search_filters) {
+                showSearchFilters()
+                true
+            } else false
+        }
         val input = findViewById<EditText>(R.id.queryInput)
         val recycler = findViewById<RecyclerView>(R.id.recycler)
         emptyText = findViewById(R.id.emptyText)
@@ -174,17 +185,19 @@ class GlobalSearchActivity : AppCompatActivity() {
         val onlyResults = app.prefs.searchOnlyResults
 
         val extra = all.filter { it.kind != KIND_SOURCE && (it.cards.isNotEmpty() || it.error != null) }
+        val sourceErrors = if (combine) all.filter { it.kind == KIND_SOURCE && it.error != null } else emptyList()
         val perSource = if (combine) emptyList() else {
             val list = all.filter { it.kind == KIND_SOURCE }
             sortSources(if (onlyResults) list.filter { it.cards.isNotEmpty() } else list)
         }
-        sectionAdapter.submitList(extra + perSource)
+        sectionAdapter.submitList(extra + sourceErrors + perSource)
 
         val rows = if (combine) visibleGroups(grouped).map { toRow(it) } else emptyList()
         titleAdapter.submitList(rows)
 
         val searching = all.any { it.loading }
-        val anything = extra.isNotEmpty() || rows.isNotEmpty() || perSource.any { it.cards.isNotEmpty() }
+        val anything = extra.isNotEmpty() || sourceErrors.isNotEmpty() ||
+            rows.isNotEmpty() || perSource.any { it.cards.isNotEmpty() }
         emptyText.visibility = if (all.isNotEmpty() && !searching && !anything) View.VISIBLE else View.GONE
         val errors = all.count { it.error != null }
         emptyText.text = if (errors > 0) "No results • $errors source(s) could not be reached" else "No results"
@@ -239,10 +252,78 @@ class GlobalSearchActivity : AppCompatActivity() {
         )
     }
 
+    private fun showSearchFilters() {
+        val fields = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val padding = (20 * resources.displayMetrics.density).toInt()
+            setPadding(padding, padding, padding, 0)
+        }
+        val genre = EditText(this).apply {
+            hint = "Genre or tag (optional)"
+            setSingleLine(true)
+            setText(genreFilter)
+        }
+        val artist = EditText(this).apply {
+            hint = "Artist (optional)"
+            setSingleLine(true)
+            setText(artistFilter)
+        }
+        fields.addView(genre)
+        fields.addView(artist)
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Search filters")
+            .setView(fields)
+            .setPositiveButton("Apply") { _, _ ->
+                genreFilter = genre.text.toString().trim()
+                artistFilter = artist.text.toString().trim()
+                runSearch(findViewById<EditText>(R.id.queryInput).text.toString().trim())
+            }
+            .setNeutralButton("Clear") { _, _ ->
+                genreFilter = ""
+                artistFilter = ""
+                runSearch(findViewById<EditText>(R.id.queryInput).text.toString().trim())
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun hasSearchFilters() = genreFilter.isNotBlank() || artistFilter.isNotBlank()
+
+    private fun matchesFilters(manga: com.imperialreader.data.db.MangaEntity) =
+        matchesSearchFilters(manga.artist, manga.genre)
+
+    private fun matchesFilters(manga: SManga) =
+        matchesSearchFilters(manga.artist, manga.genre)
+
+    private fun matchesFilters(item: BookItem) =
+        matchesSearchFilters(item.artist, item.genre)
+
+    private fun matchesSearchFilters(artist: String?, genre: String?): Boolean =
+        (genreFilter.isBlank() || genre?.contains(genreFilter, ignoreCase = true) == true) &&
+            (artistFilter.isBlank() || artist?.contains(artistFilter, ignoreCase = true) == true)
+
+    private fun searchRelevance(title: String, query: String): Int {
+        val normalized = normalizeTitle(title)
+        val q = normalizeTitle(query)
+        return when {
+            q.isBlank() -> 1
+            normalized == q -> 0
+            normalized.contains(q) -> 1
+            else -> 2
+        }
+    }
+
     // ---------------------------------------------------------------- searching
 
     private fun runSearch(q: String) {
-        if (q.isBlank()) return
+        if (q.isBlank() && !hasSearchFilters()) {
+            searchJob?.cancel()
+            sections.value = emptyList()
+            groups.value = emptyList()
+            hits.clear()
+            stats.clear()
+            return
+        }
         searchJob?.cancel()
         currentQuery = q
         hits.clear()
@@ -263,7 +344,11 @@ class GlobalSearchActivity : AppCompatActivity() {
     private suspend fun searchAll(q: String, combine: Boolean) {
         coroutineScope {
             val initial = mutableListOf<SourceResult>()
-            val libraryMatches = app.db.mangaDao().searchLibrary("%$q%")
+            val libraryMatches = (if (q.isBlank()) {
+                app.db.mangaDao().getFavoritesList()
+            } else {
+                app.db.mangaDao().searchLibrary("%$q%")
+            }).filter(::matchesFilters)
             if (libraryMatches.isNotEmpty()) {
                 initial += SourceResult(
                     sourceId = "library", sourceName = "In your library", loading = false, kind = KIND_LIBRARY,
@@ -287,7 +372,31 @@ class GlobalSearchActivity : AppCompatActivity() {
                 sources.map { s ->
                     async {
                         val found: List<SManga> = try {
-                            searchSem.withPermit { s.search(q, 1).mangas.take(15) }
+                            val candidates = searchSem.withPermit {
+                                (if (q.isBlank()) s.getPopular(1) else s.search(q, 1)).mangas.take(15)
+                            }
+                            if (!hasSearchFilters()) {
+                                candidates
+                            } else {
+                                var failures = 0
+                                val matched = candidates.mapNotNull { candidate ->
+                                    try {
+                                        val details = searchSem.withPermit { s.getMangaDetails(candidate) }
+                                        details.takeIf(::matchesFilters)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        failures++
+                                        null
+                                    }
+                                }
+                                if (failures > 0) {
+                                    update(s.id) {
+                                        it.copy(error = "$failures result(s) could not be checked against metadata filters")
+                                    }
+                                }
+                                matched
+                            }
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -337,10 +446,32 @@ class GlobalSearchActivity : AppCompatActivity() {
             sources.forEach { source ->
                 launch {
                     val result = try {
-                        val books = withTimeout(12_000L) {
-                            sem.withPermit { source.search(q, 1).take(10) }
+                        val candidates = withTimeout(12_000L) {
+                            sem.withPermit {
+                                (if (q.isBlank()) source.popular(1) else source.search(q, 1)).take(10)
+                            }
                         }
-                        books to null
+                        if (!hasSearchFilters()) {
+                            candidates to null
+                        } else {
+                            var failures = 0
+                            val books = candidates.mapNotNull { item ->
+                                try {
+                                    val detailed = withTimeout(12_000L) {
+                                        sem.withPermit { source.details(item) }
+                                    }
+                                    detailed.takeIf(::matchesFilters)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    failures++
+                                    null
+                                }
+                            }
+                            books to if (failures > 0) {
+                                "${source.name}: $failures result(s) could not be checked against metadata filters"
+                            } else null
+                        }
                     } catch (e: TimeoutCancellationException) {
                         emptyList<BookItem>() to "${source.name}: timed out"
                     } catch (e: CancellationException) {
@@ -356,7 +487,9 @@ class GlobalSearchActivity : AppCompatActivity() {
                 completed++
                 found += books
                 error?.let(errors::add)
-                val cards = found.distinctBy { it.title.lowercase() + (it.author ?: "") }.map { item ->
+                val cards = found.distinctBy { it.key }
+                    .sortedWith(compareBy<BookItem> { searchRelevance(it.title, q) }.thenBy { it.title })
+                    .map { item ->
                     val badge = if (BookSources.get(item.sourceId)?.isWebNovel == true) "NOVEL" else "EPUB"
                     CardItem(key = item.key, title = item.title, cover = item.coverUrl, badge1 = badge, tag = item)
                 }

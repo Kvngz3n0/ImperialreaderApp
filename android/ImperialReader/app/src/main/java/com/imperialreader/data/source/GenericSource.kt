@@ -199,9 +199,25 @@ class GenericSource(
             ?.takeIf { it.length > 30 }
             ?: d.select("p").map { it.text().trim() }.filter { it.length > 80 }.maxByOrNull { it.length }
             ?: manga.description
-        manga.genre = d.select("a[href*=genre], a[href*=/tag], a[href*=categor]").map { it.text().trim().trim(',') }
-            .filter { it.isNotBlank() && it.length < 25 }.distinct().take(10).joinToString(", ").ifBlank { null }
-        fun labeled(label: String): String? = d.select("li, p, div, span, td, tr").asSequence()
+        val selectedAreas = d.select(
+            ".infox, .infotable, .post-content_item, .series-info, .manga-info, .book-info, .entry-content, .summary_content"
+        )
+        val detailAreas = if (selectedAreas.isEmpty()) d.select("main, article, body") else selectedAreas
+        val genreLinks = detailAreas.select(
+            ".genres a, .genre a, .tags a, .tag a, .manga-genres a, .series-genres a, " +
+                ".genres-content a, .mgen a, .seriestugenre a, [itemprop=genre]"
+        ) + d.select("[itemprop=genre]")
+        val labeledGenres = detailAreas.select("li, p, div, span, td, tr").filter { element ->
+            val text = element.ownText().ifBlank { element.text() }.trim()
+            text.startsWith("Genre", true) || text.startsWith("Tag", true)
+        }.flatMap { it.select("a, [itemprop=genre]") }
+        manga.genre = (genreLinks + labeledGenres)
+            .filter { link -> link.parents().none { it.tagName() in setOf("nav", "header", "footer") } }
+            .map { it.text().trim().trim(',') }
+            .filter { it.isNotBlank() && it.length < 50 }.distinct().take(20)
+            .joinToString(", ").ifBlank { null }
+        fun labeled(label: String): String? = detailAreas.select("li, p, div, span, td, tr").asSequence()
+            .filter { item -> item.parents().none { it.tagName() in setOf("nav", "header", "footer") } }
             .map { it.ownText().ifBlank { it.text() }.trim() }
             .firstOrNull { it.length < 140 && it.startsWith(label, ignoreCase = true) && it.length > label.length }
             ?.substring(label.length)?.trim(' ', ':', '-')?.ifBlank { null }

@@ -23,6 +23,7 @@ sealed class LoadedChapter {
     /** Page list: each entry is an http(s) URL, a content:// URI or a file:// URI. */
     data class Images(val pages: List<String>, val headers: Map<String, String>) : LoadedChapter()
     data class Epub(val uri: String) : LoadedChapter()
+    data class Pdf(val uri: String) : LoadedChapter()
 }
 
 object ChapterLoader {
@@ -65,6 +66,7 @@ object ChapterLoader {
                 LoadedChapter.Images(files.map { it.uri.toString() }, emptyMap())
             }
             name.endsWith(".epub") -> LoadedChapter.Epub(doc.uri.toString())
+            name.endsWith(".pdf") -> LoadedChapter.Pdf(doc.uri.toString())
             else -> {
                 val pages = extractArchive(ctx, doc)
                 if (pages.isEmpty()) throw IOException("No images found inside the archive")

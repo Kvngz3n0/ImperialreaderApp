@@ -31,6 +31,9 @@
             android:background="?attr/selectableItemBackgroundBorderless"
             android:src="@drawable/ic_skip_next" android:contentDescription="next"/>
     </LinearLayout>
+    <SeekBar android:id="@+id/sectionProgress"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:background="@color/nav" android:paddingStart="16dp" android:paddingEnd="16dp"/>
     <LinearLayout
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="horizontal" android:gravity="center"

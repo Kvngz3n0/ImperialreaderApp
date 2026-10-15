@@ -112,7 +112,18 @@ class MangaRepository(private val ctx: Context) {
         val bookSource = BookSources.get(manga.source)
         if (bookSource?.isWebNovel == true) {
             val item = BookSources.itemFor(manga) ?: throw IOException("Book entry is unavailable")
-            val sourceChapters = bookSource.chapters(item)
+            val details = bookSource.details(item)
+            val updatedManga = manga.copy(
+                author = details.author ?: manga.author,
+                artist = details.artist ?: manga.artist,
+                description = details.description ?: manga.description,
+                genre = details.genre ?: manga.genre,
+                coverUrl = details.coverUrl ?: manga.coverUrl,
+                initialized = true,
+                lastUpdate = System.currentTimeMillis()
+            )
+            db.mangaDao().update(updatedManga)
+            val sourceChapters = bookSource.chapters(details)
             if (sourceChapters.isEmpty()) {
                 throw IOException("${bookSource.name} returned no chapters; the existing chapter list was kept")
             }
@@ -128,8 +139,7 @@ class MangaRepository(private val ctx: Context) {
                         chapterNumber = index + 1f
                     )
                 }
-            db.mangaDao().update(manga.copy(initialized = true, lastUpdate = System.currentTimeMillis()))
-            return syncChapters(manga.id, chapters, trackUpdates = true)
+            return syncChapters(updatedManga.id, chapters, trackUpdates = true)
         }
         val source = ctx.app.sources.get(manga.source)
             ?: throw IOException("Source '${manga.source}' is not available")

@@ -27,6 +27,8 @@ object BookActions {
     fun show(activity: AppCompatActivity, item: BookItem) {
         val details = buildString {
             append(item.author ?: "Unknown author")
+            item.artist?.takeIf { it.isNotBlank() }?.let { append("\nArtist: ").append(it) }
+            item.genre?.takeIf { it.isNotBlank() }?.let { append("\nGenres/tags: ").append(it) }
             append("\nSource: ").append(item.sourceName)
             item.description?.takeIf { it.isNotBlank() }?.let { append("\n\n").append(it.take(500)) }
         }
@@ -57,7 +59,18 @@ object BookActions {
                         title = item.title,
                         thumbnailUrl = item.coverUrl,
                         author = item.author,
-                        description = item.description
+                        artist = item.artist,
+                        description = item.description,
+                        genre = item.genre
+                    )
+                )
+                app.db.mangaDao().update(
+                    manga.copy(
+                        author = item.author ?: manga.author,
+                        artist = item.artist ?: manga.artist,
+                        description = item.description ?: manga.description,
+                        genre = item.genre ?: manga.genre,
+                        coverUrl = item.coverUrl ?: manga.coverUrl
                     )
                 )
                 if (!manga.favorite) app.repo.toggleFavorite(manga)

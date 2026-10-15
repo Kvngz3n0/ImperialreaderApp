@@ -16,14 +16,15 @@ import java.io.IOException
 
 /**
  * Reads <storage folder>/local exactly like Mihon:
- * one folder = one manga; each .cbz/.zip/.epub file or image sub-folder = one chapter.
+ * one folder = one manga; each supported file or image sub-folder = one chapter.
  */
 class LocalScanner(private val ctx: Context) {
 
     companion object {
         fun isArchive(name: String?): Boolean {
             val n = name?.lowercase() ?: return false
-            return n.endsWith(".cbz") || n.endsWith(".zip") || n.endsWith(".epub") || n.endsWith(".cbr") || n.endsWith(".rar")
+            return n.endsWith(".cbz") || n.endsWith(".zip") || n.endsWith(".epub") ||
+                n.endsWith(".cbr") || n.endsWith(".rar") || n.endsWith(".pdf")
         }
     }
 
@@ -109,6 +110,7 @@ class LocalScanner(private val ctx: Context) {
                 coverDoc != null || first.isDirectory ->
                     ctx.contentResolver.openInputStream(signatureDoc.uri)?.use { i -> target.outputStream().use { i.copyTo(it) } } != null
                 first.name.orEmpty().lowercase().endsWith(".epub") -> extractEpubCover(first, target)
+                first.name.orEmpty().lowercase().endsWith(".pdf") -> extractPdfCover(first, target)
                 else -> Archives.extractFirstImage(ctx, first, target)
             }
         } catch (_: Exception) {
@@ -163,6 +165,31 @@ class LocalScanner(private val ctx: Context) {
             }
         } finally {
             tmp.delete()
+        }
+    }
+
+    private fun extractPdfCover(doc: DocumentFile, target: File): Boolean {
+        val descriptor = ctx.contentResolver.openFileDescriptor(doc.uri, "r") ?: return false
+        descriptor.use { file ->
+            android.graphics.pdf.PdfRenderer(file).use { renderer ->
+                if (renderer.pageCount == 0) return false
+                renderer.openPage(0).use { page ->
+                    val scale = minOf(1200f / page.width, 1800f / page.height, 1f)
+                    val bitmap = android.graphics.Bitmap.createBitmap(
+                        (page.width * scale).toInt().coerceAtLeast(1),
+                        (page.height * scale).toInt().coerceAtLeast(1),
+                        android.graphics.Bitmap.Config.ARGB_8888
+                    )
+                    try {
+                        page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                        return target.outputStream().use {
+                            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, it)
+                        }
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
         }
     }
 }

@@ -75,6 +75,22 @@ class NovelPingSource : BookSource {
         }
     }
 
+    override suspend fun details(item: BookItem): BookItem {
+        val url = bookUrl(item.id) ?: throw IOException("Invalid NovelPing title address")
+        val doc = fetchDoc(url)
+        val detail = doc.selectFirst(".book-info, .novel-info, .book-meta, .book-detail") ?: doc
+        val genres = detail.select(".genres a, .genre a, .tags a, .tag a, a[href*=genre], a[href*=tag]")
+            .map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
+        val author = detail.selectFirst(".author a, .book-author a, [itemprop=author]")?.text()?.trim()
+            ?.ifBlank { null }
+        return item.copy(
+            author = author ?: item.author,
+            genre = genres.joinToString(", ").ifBlank { null } ?: item.genre,
+            description = doc.selectFirst(".description, #description, .book-description")
+                ?.text()?.trim()?.ifBlank { null } ?: item.description
+        )
+    }
+
     override suspend fun chapters(item: BookItem): List<NovelChapter> {
         val novelUrl = bookUrl(item.id) ?: throw IOException("Invalid NovelPing title address")
         val slug = Uri.parse(novelUrl).lastPathSegment

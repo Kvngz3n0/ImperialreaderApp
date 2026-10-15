@@ -33,7 +33,9 @@ data class BookItem(
     val author: String?,
     val coverUrl: String?,
     val epubUrl: String?,
-    val description: String? = null
+    val description: String? = null,
+    val artist: String? = null,
+    val genre: String? = null
 ) {
     val key: String get() = "$sourceId:$id"
 }
@@ -58,6 +60,7 @@ interface BookSource {
 
     /** Web novels: the readable HTML of one chapter. */
     suspend fun chapterHtml(chapter: NovelChapter): String = throw IOException("Not a web-novel source")
+    suspend fun details(item: BookItem): BookItem = item
     suspend fun popular(page: Int): List<BookItem>
     suspend fun search(query: String, page: Int): List<BookItem>
 
@@ -83,6 +86,32 @@ internal suspend fun fetchText(url: String): String = withContext(Dispatchers.IO
 }
 
 private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
+
+private fun webNovelDetails(item: BookItem, html: String): BookItem {
+    val doc = Jsoup.parse(html, item.id)
+    val fields = doc.select(
+        ".book-info li, .book-info p, .book-information li, .novel-info li, .novel-info p, .book-meta li, .info li"
+    )
+    fun field(label: String): String? = fields.firstNotNullOfOrNull { element ->
+        val text = element.text().trim()
+        if (text.startsWith(label, ignoreCase = true)) {
+            text.substring(label.length).trim(' ', ':', '-').ifBlank { null }
+        } else null
+    }
+    val genres = doc.select(
+        ".genres a, .genre a, .tags a, .tag a, .book-info a[href*=genre], .book-info a[href*=tag]"
+    ).map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
+    val description = doc.selectFirst("#book-description, .book-description, .novel-description, .description")
+        ?.text()?.trim()?.ifBlank { null }
+    return item.copy(
+        author = field("Author") ?: field("Authors")
+            ?: doc.selectFirst(".author a, .book-author a")?.text()?.trim()?.ifBlank { null }
+            ?: item.author,
+        artist = field("Artist") ?: item.artist,
+        genre = genres.joinToString(", ").ifBlank { null } ?: field("Genres") ?: field("Tags") ?: item.genre,
+        description = description ?: item.description
+    )
+}
 
 /** Project Gutenberg through the public Gutendex API: public-domain classics, real EPUB files. */
 class GutenbergSource : BookSource {
@@ -177,6 +206,21 @@ class RoyalRoadSource : BookSource {
     override suspend fun popular(page: Int) = list("$base/fictions/best-rated?page=$page")
     override suspend fun search(query: String, page: Int) = list("$base/fictions/search?title=${enc(query)}&page=$page")
 
+    override suspend fun details(item: BookItem): BookItem {
+        val doc = Jsoup.parse(fetchHtml(item.id), item.id)
+        val info = doc.selectFirst(".fiction-info, .fiction-stats, .fiction-content") ?: doc
+        val genres = info.select(".tags a, .fiction-tags a, a[href*=/fiction/genre/]")
+            .map { it.text().trim() }.filter { it.isNotBlank() }.distinct()
+        val author = doc.selectFirst(".author a, .fiction-author a")?.text()?.trim()
+            ?.ifBlank { null } ?: item.author
+        return item.copy(
+            author = author,
+            description = doc.selectFirst(".description, .fiction-description")?.text()?.trim()
+                ?.ifBlank { null } ?: item.description,
+            genre = genres.joinToString(", ").ifBlank { null }
+        )
+    }
+
     private suspend fun list(url: String): List<BookItem> {
         val doc = Jsoup.parse(fetchHtml(url), base)
         return doc.select("div.fiction-list-item").mapNotNull { el ->
@@ -215,6 +259,8 @@ class NovelPhoenixSource : BookSource {
 
     override suspend fun search(query: String, page: Int): List<BookItem> =
         parseNovels("$base/search?keyword=${enc(query)}&page=$page")
+
+    override suspend fun details(item: BookItem): BookItem = webNovelDetails(item, fetchHtml(item.id))
 
     private suspend fun parseNovels(url: String): List<BookItem> {
         val doc = Jsoup.parse(fetchHtml(url), url)
@@ -331,6 +377,8 @@ class NovelFireSource : BookSource {
 
     override suspend fun search(query: String, page: Int): List<BookItem> =
         parseNovels("$base/search?keyword=${enc(query)}&page=$page")
+
+    override suspend fun details(item: BookItem): BookItem = webNovelDetails(item, fetchHtml(item.id))
 
     private suspend fun parseNovels(url: String): List<BookItem> {
         val doc = Jsoup.parse(fetchHtml(url), url)
@@ -452,6 +500,20 @@ class WebNovelSource(
     override suspend fun popular(page: Int) = engine.getPopular(page).mangas.map { toItem(it) }
     override suspend fun search(query: String, page: Int) = engine.search(query, page).mangas.map { toItem(it) }
 
+    override suspend fun details(item: BookItem): BookItem {
+        val details = engine.getMangaDetails(
+            SManga(url = item.id, title = item.title, thumbnailUrl = item.coverUrl, author = item.author)
+        )
+        return item.copy(
+            title = details.title,
+            author = details.author,
+            artist = details.artist,
+            description = details.description,
+            genre = details.genre,
+            coverUrl = details.thumbnailUrl ?: item.coverUrl
+        )
+    }
+
     override suspend fun chapters(item: BookItem): List<NovelChapter> {
         val newestFirst = engine.getChapters(SManga(url = item.id, title = item.title))
         return newestFirst.reversed().map { NovelChapter(it.name, it.url) }
@@ -471,7 +533,7 @@ object BookSources {
         "Light Novel Translations" to "https://lightnovelstranslations.com", "LnMTL" to "https://lnmtl.com",
         "Luxon Scan" to "https://luxonscan.com", "MtlNovel" to "https://www.mtlnovel.com",
         "Novel Buddy" to "https://novelbuddy.com", "Novel Light" to "https://novellight.net",
-        "NovelPing" to "https://novelping.com",
+        "NovelPing" to "https://novelping.com", "NovelArrow" to "https://novelarrow.com",
         "Novel Phoenix" to "https://novelphoenix.com", "NovelBin" to "https://novelbin.me",
         "NovelFire" to "https://novelfire.net", "NovelFull" to "https://novelfull.com",
         "PawRead" to "https://pawread.com", "Ranovel" to "https://ranovel.com",
@@ -503,6 +565,8 @@ object BookSources {
             id = manga.url,
             title = manga.title,
             author = manga.author,
+            artist = manga.artist,
+            genre = manga.genre,
             coverUrl = manga.coverUrl,
             epubUrl = null,
             description = manga.description
