@@ -19,10 +19,12 @@ open class MadaraSource(
     override val name: String,
     override val baseUrl: String,
     override val lang: String = "en",
-    private val mangaPath: String = "manga"
+    private val mangaPath: String = "manga",
+    idOverride: String? = null,
+    override val nsfw: Boolean = false
 ) : HttpSource() {
 
-    override val id: String =
+    override val id: String = idOverride ?:
         "madara_" + (runCatching { URI(baseUrl).host }.getOrNull() ?: name).lowercase().replace(Regex("[^a-z0-9]"), "_")
 
     private val itemSelector = "div.page-item-detail, div.c-tabs-item__content"

@@ -1,7 +1,6 @@
 package com.imperialreader.ui.library
 
 import android.os.Bundle
-import android.graphics.Color
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
@@ -51,6 +50,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private var categories: List<CategoryEntity> = emptyList()
     private var visibleItems: List<LibraryItem> = emptyList()
     private var selectionMode = false
+    private var libraryRefreshInProgress = false
     private val selectedIds = linkedSetOf<Long>()
 
     private lateinit var adapter: MangaCardAdapter
@@ -67,8 +67,6 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
         toolbar = view.findViewById(R.id.toolbar)
         val swipe = view.findViewById<SwipeRefreshLayout>(R.id.swipe)
-        swipe.setColorSchemeColors(Color.TRANSPARENT)
-        swipe.setProgressBackgroundColorSchemeColor(Color.TRANSPARENT)
         val emptyView = view.findViewById<LinearLayout>(R.id.emptyView)
         val emptyText = view.findViewById<TextView>(R.id.emptyText)
         val btnGlobal = view.findViewById<Button>(R.id.btnGlobalSearch)
@@ -172,10 +170,13 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         btnGlobal.setOnClickListener { openGlobal(query.value) }
 
         swipe.setOnRefreshListener {
+            swipe.isRefreshing = false
+            if (libraryRefreshInProgress) return@setOnRefreshListener
+            libraryRefreshInProgress = true
             viewLifecycleOwner.lifecycleScope.launch {
                 sprite.start(speed = 1.5f)
-                LibraryRefreshNotification.show(requireContext(), 0, 0)
                 try {
+                    LibraryRefreshNotification.show(requireContext(), 0, 0)
                     val n = app.repo.updateLibrary(onProgress = { done, total ->
                         LibraryRefreshNotification.show(requireContext(), done, total)
                     })
@@ -187,7 +188,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 } finally {
                     LibraryRefreshNotification.clear(requireContext())
                     sprite.stop()
-                    swipe.isRefreshing = false
+                    libraryRefreshInProgress = false
                 }
             }
         }

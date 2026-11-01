@@ -120,16 +120,20 @@ interface ChapterDao {
     @Query("UPDATE chapters SET downloaded = :downloaded WHERE id = :id")
     suspend fun setDownloaded(id: Long, downloaded: Boolean)
 
+    @Query("UPDATE chapters SET updateSeen = 1 WHERE dateFetch > 0 AND updateSeen = 0")
+    suspend fun markUpdatesSeen()
+
     @Query(
         "SELECT c.*, m.title AS mangaTitle, COALESCE(m.customCoverUri, m.coverUrl) AS mangaCover, m.source AS mangaSource " +
             "FROM chapters c JOIN manga m ON m.id = c.mangaId " +
-            "WHERE m.favorite = 1 AND c.dateFetch > 0 ORDER BY c.dateFetch DESC, c.sourceOrder ASC LIMIT 300"
+            "WHERE m.favorite = 1 AND c.dateFetch > 0 " +
+            "ORDER BY c.dateFetch DESC, c.sourceOrder ASC LIMIT 300"
     )
     fun observeUpdates(): Flow<List<UpdateItem>>
 
     @Query(
         "SELECT COUNT(*) FROM chapters c JOIN manga m ON m.id = c.mangaId " +
-            "WHERE m.favorite = 1 AND c.dateFetch > 0"
+            "WHERE m.favorite = 1 AND c.dateFetch > 0 AND c.updateSeen = 0"
     )
     fun observeUpdateCount(): Flow<Int>
 }

@@ -47,13 +47,13 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 - Save titles to your library and group them into custom categories.
 - Search, sort, and filter library entries, including by unread chapters, bookmarks, and downloaded chapters.
 - Select multiple titles to move them between categories or remove them from the library.
-- See unread, downloaded/local, and new-chapter counts, with display options in Settings. The **Updates** tab badge shows the number of unread chapter updates.
-- Set a custom cover for a title from its details screen.
+- See unread, downloaded/local, and new-chapter counts, with display options in Settings. The **Updates** tab badge shows unseen chapter updates and clears when you open the tab; updates remain listed and are dimmed until new chapters arrive.
+- Set a custom cover for a title from its details screen. Tap the cover in the details header to view it full-screen and save it to Pictures.
 - Refresh a title's chapter list or update the library for new chapters.
 
 ### Read, track, and download
 
-- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts.
+- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts. Animated GIF pages and covers are supported.
 - Resume reading progress, move between chapters, and optionally use screen-edge taps or volume keys for page navigation.
 - Bookmark chapters, mark chapters read or unread, and see reading history. Incognito mode disables reading-history entries.
 - Queue chapter downloads, follow the queue in **More**, and read downloaded chapters offline. Large multi-chapter downloads are grouped by title and can be paused or resumed together.

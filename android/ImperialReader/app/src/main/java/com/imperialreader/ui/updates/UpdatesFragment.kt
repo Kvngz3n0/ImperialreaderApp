@@ -77,7 +77,7 @@ class UpdatesFragment : Fragment(R.layout.fragment_updates) {
                             title = u.mangaTitle,
                             subtitle = u.chapter.name + " • " + relativeTime(u.chapter.dateFetch),
                             cover = u.mangaCover,
-                            dim = u.chapter.read,
+                            dim = u.chapter.read || u.chapter.updateSeen,
                             showAction = !u.chapter.downloaded,
                             headers = app.sources.get(u.mangaSource)?.imageHeaders() ?: emptyMap(),
                             tag = u

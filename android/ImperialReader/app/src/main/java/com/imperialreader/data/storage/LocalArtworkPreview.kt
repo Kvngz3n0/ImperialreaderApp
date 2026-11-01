@@ -89,7 +89,8 @@ object LocalArtworkPreview {
             if (String(signature, Charsets.US_ASCII) != "8BPS") return false
 
             input.seek(26)
-            input.seek(input.filePointer + readUInt32(input))
+            val colorModeLength = readUInt32(input)
+            input.seek(input.filePointer + colorModeLength)
             val resourcesLength = readUInt32(input)
             val end = input.filePointer + resourcesLength
             while (input.filePointer + 12 <= end) {

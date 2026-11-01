@@ -62,7 +62,8 @@ data class ChapterEntity(
     val read: Boolean = false,
     val bookmark: Boolean = false,
     val lastPageRead: Int = 0,
-    val downloaded: Boolean = false
+    val downloaded: Boolean = false,
+    val updateSeen: Boolean = false
 )
 
 @Entity(

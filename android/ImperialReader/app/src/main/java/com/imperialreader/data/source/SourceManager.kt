@@ -44,9 +44,15 @@ class SourceManager(private val context: Context) {
         HentaraSource(),
         Manga18Source("Manga18 ME", "https://manga18.me"),
         MangaFireSource(),
-        GenericSource("AllPornComic", "https://allporncomic.com", nsfw = true),
+        MadaraSource(
+            "AllPornComic",
+            "https://allporncomic.com",
+            mangaPath = "comic",
+            idOverride = "generic_allporncomic_com",
+            nsfw = true
+        ),
         PawchiveSource(),
-        GenericSource("Comix.to", "https://comix.to"),
+        ComixSource(),
         // Western comics
         WordPressSource("TritiniaScans", "https://tritinia.org"),
         WordPressSource("VortexScans", "https://vortexscans.org"),

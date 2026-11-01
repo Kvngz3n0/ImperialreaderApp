@@ -1,20 +1,27 @@
 package com.imperialreader.ui.details
 
+import android.app.Dialog
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.PopupMenu
 import android.widget.TextView
+import android.view.WindowManager
+import coil.load
 import androidx.lifecycle.Lifecycle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
@@ -46,6 +53,7 @@ import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.ui.common.loadCover
 import com.imperialreader.ui.common.LibraryActions
 import com.imperialreader.ui.browse.GlobalSearchActivity
+import com.imperialreader.ui.reader.GalleryPageSaver
 import com.imperialreader.ui.reader.ReaderActivity
 import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
@@ -63,6 +71,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
+import java.io.IOException
 
 data class ChapterRow(val chapter: ChapterEntity, val progress: Int?, val selected: Boolean = false)
 
@@ -852,6 +861,9 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             val manga = m ?: return
             val source = app.sources.get(manga.source)
             h.cover.loadCover(manga.displayCoverUrl, source?.imageHeaders().orEmpty())
+            h.cover.setOnClickListener {
+                manga.displayCoverUrl?.let { url -> showCoverViewer(url, source?.imageHeaders().orEmpty()) }
+            }
             h.title.text = manga.title
             h.title.setOnClickListener {
                 h.title.context.startActivity(GlobalSearchActivity.intent(h.title.context, manga.title))
@@ -884,6 +896,73 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
             h.chapters.text = "$count chapters"
         }
+    }
+
+    private fun showCoverViewer(url: String, headers: Map<String, String>) {
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            load(url) {
+                headers.forEach { (name, value) -> addHeader(name, value) }
+            }
+        }
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            addView(
+                image,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+        val save = ImageButton(this).apply {
+            contentDescription = "Save cover image"
+            setImageResource(R.drawable.ic_download)
+            setColorFilter(getColor(R.color.gold))
+            val density = resources.displayMetrics.density
+            val inset = (20 * density).toInt()
+            setPadding(inset / 2, inset / 2, inset / 2, inset / 2)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(0xDD202020.toInt())
+                setStroke((2 * density).toInt(), getColor(R.color.gold))
+            }
+            setOnClickListener {
+                isEnabled = false
+                lifecycleScope.launch {
+                    var bitmap: android.graphics.Bitmap? = null
+                    try {
+                        bitmap = GalleryPageSaver.copyDisplayedPage(image)
+                            ?: throw IOException("The cover has not finished loading")
+                        GalleryPageSaver.save(this@MangaDetailsActivity, bitmap)
+                        toast("Cover saved to Pictures/ImperialReader")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        toast("Could not save the cover: ${e.message}")
+                    } finally {
+                        bitmap?.recycle()
+                        isEnabled = true
+                    }
+                }
+            }
+        }
+        val buttonSize = (52 * resources.displayMetrics.density).toInt()
+        val buttonMargin = (20 * resources.displayMetrics.density).toInt()
+        root.addView(
+            save,
+            FrameLayout.LayoutParams(buttonSize, buttonSize, Gravity.BOTTOM or Gravity.END).apply {
+                setMargins(0, 0, buttonMargin, buttonMargin)
+            }
+        )
+
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.setContentView(root)
+        dialog.show()
+        dialog.window?.setLayout(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT
+        )
     }
 
     private inner class ChapterAdapter(

@@ -44,7 +44,11 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
         val nav = findViewById<BottomNavigationView>(R.id.nav)
         nav.setOnItemSelectedListener { item ->
             show(item.itemId)
+            if (item.itemId == R.id.nav_updates) markUpdatesSeen()
             true
+        }
+        nav.setOnItemReselectedListener { item ->
+            if (item.itemId == R.id.nav_updates) markUpdatesSeen()
         }
         if (savedInstanceState == null) {
             nav.selectedItemId = R.id.nav_library
@@ -65,6 +69,7 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
                         nav.removeBadge(R.id.nav_updates)
                     }
                 }
+
             }
         }
 
@@ -99,6 +104,10 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    private fun markUpdatesSeen() {
+        lifecycleScope.launch { app.db.chapterDao().markUpdatesSeen() }
     }
 
     private fun create(id: Int): Fragment = when (id) {

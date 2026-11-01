@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.View
 import android.widget.Button
-import android.widget.ImageView
 import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,7 +17,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import coil.load
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.imageview.ShapeableImageView
 import com.google.android.material.materialswitch.MaterialSwitch
+import com.google.android.material.shape.ShapeAppearanceModel
 import com.imperialreader.R
 import com.imperialreader.data.backup.BackupManager
 import com.imperialreader.data.storage.LocalScanner
@@ -43,7 +44,7 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     private lateinit var queueEmpty: TextView
     private lateinit var queueRecycler: RecyclerView
     private lateinit var queueAdapter: DownloadQueueAdapter
-    private lateinit var profileAvatar: ImageView
+    private lateinit var profileAvatar: ShapeableImageView
     private lateinit var appUpdateSub: TextView
     private var queueItems: List<com.imperialreader.data.download.DownloadQueueItem> = emptyList()
     private var pendingUpdateApk: File? = null
@@ -150,6 +151,12 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         }
         refreshAutomaticBackupText()
         profileAvatar = view.findViewById(R.id.profileAvatar)
+        profileAvatar.shapeAppearanceModel =
+            ShapeAppearanceModel.builder().setAllCornerSizes(1_000f).build()
+        profileAvatar.strokeColor = android.content.res.ColorStateList.valueOf(
+            requireContext().getColor(R.color.gold)
+        )
+        profileAvatar.strokeWidth = 2f * resources.displayMetrics.density
         profileAvatar.setOnClickListener { chooseProfilePicture.launch(arrayOf("image/*")) }
         view.findViewById<View>(R.id.rowProfile)
             .setOnClickListener { chooseProfilePicture.launch(arrayOf("image/*")) }
