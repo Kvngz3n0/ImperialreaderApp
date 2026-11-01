@@ -1,6 +1,7 @@
 package com.imperialreader.data.repo
 
 import android.content.Context
+import android.util.Log
 import androidx.room.withTransaction
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.HistoryEntity
@@ -18,6 +19,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
@@ -25,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger
 class MangaRepository(private val ctx: Context) {
 
     private val db get() = ctx.app.db
+    private val automaticRefreshMutex = Mutex()
 
     /** Returns the stored row for a source entry, creating a (non-library) row if needed. */
     suspend fun getOrCreate(sourceId: String, s: SManga): MangaEntity {
@@ -84,26 +88,31 @@ class MangaRepository(private val ctx: Context) {
     }
 
     /** Refreshes only an entry's cover, leaving chapter state untouched. */
-    suspend fun refreshCover(manga: MangaEntity): Boolean {
-        if (manga.source == LOCAL_SOURCE_ID || BookSources.get(manga.source) != null) return false
-        val source = ctx.app.sources.get(manga.source)
-            ?: throw IOException("Source '${manga.source}' is not available")
-        val details = source.getMangaDetails(
-            SManga(
-                url = manga.url,
-                title = manga.title,
-                thumbnailUrl = manga.coverUrl,
-                author = manga.author,
-                artist = manga.artist,
-                description = manga.description,
-                genre = manga.genre,
-                status = manga.status
+    suspend fun refreshCover(manga: MangaEntity): Boolean = automaticRefreshMutex.withLock {
+        if (manga.source == LOCAL_SOURCE_ID || BookSources.get(manga.source) != null) {
+            false
+        } else {
+            val source = ctx.app.sources.get(manga.source)
+                ?: throw IOException("Source '${manga.source}' is not available")
+            val details = source.getMangaDetails(
+                SManga(
+                    url = manga.url,
+                    title = manga.title,
+                    thumbnailUrl = manga.coverUrl,
+                    author = manga.author,
+                    artist = manga.artist,
+                    description = manga.description,
+                    genre = manga.genre,
+                    status = manga.status
+                )
             )
-        )
-        val coverUrl = details.thumbnailUrl?.takeIf { it.isNotBlank() } ?: return false
-        if (coverUrl == manga.coverUrl) return false
-        db.mangaDao().update(manga.copy(coverUrl = coverUrl))
-        return true
+            val coverUrl = details.thumbnailUrl?.takeIf { it.isNotBlank() }
+            if (coverUrl == null || coverUrl == manga.coverUrl) false
+            else {
+                db.mangaDao().update(manga.copy(coverUrl = coverUrl))
+                true
+            }
+        }
     }
 
     /** Re-fetches details + chapter list from the source. Returns the number of NEW chapters. */
@@ -216,20 +225,34 @@ class MangaRepository(private val ctx: Context) {
     }
 
     /** Refreshes every library entry (4 at a time). Returns the total number of new chapters. */
-    suspend fun updateLibrary(onProgress: (done: Int, total: Int) -> Unit = { _, _ -> }): Int = coroutineScope {
+    suspend fun updateLibrary(
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
+        onFailure: (manga: MangaEntity, error: Exception) -> Unit = { manga, error ->
+            Log.w(TAG, "Could not update '${manga.title}'", error)
+        }
+    ): Int = automaticRefreshMutex.withLock {
+        coroutineScope {
         LocalScanner(ctx).scan()
         val favorites = db.mangaDao().getFavorites().filter { it.source != LOCAL_SOURCE_ID }
-        val sem = Semaphore(4)
+        val sem = Semaphore(8)
         val done = AtomicInteger(0)
         favorites.map { m ->
             async {
                 sem.withPermit {
-                    val n = runCatching { refresh(m) }.getOrDefault(0)
+                    val n = try {
+                        refresh(m)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        onFailure(m, e)
+                        0
+                    }
                     onProgress(done.incrementAndGet(), favorites.size)
                     n
                 }
             }
         }.awaitAll().sum()
+        }
     }
 
     suspend fun recordHistory(chapterId: Long) {
@@ -243,4 +266,8 @@ class MangaRepository(private val ctx: Context) {
 
     private fun canonicalUrl(url: String): String =
         url.lowercase().substringAfter("://").removePrefix("www.").trimEnd('/')
+
+    private companion object {
+        const val TAG = "MangaRepository"
+    }
 }

@@ -12,7 +12,8 @@ import com.imperialreader.R
 import com.imperialreader.data.download.DownloadQueueItem
 
 class DownloadQueueAdapter(
-    private val onClick: (DownloadQueueItem) -> Unit
+    private val onClick: (DownloadQueueItem) -> Unit,
+    private val onActions: (DownloadQueueItem) -> Unit
 ) : ListAdapter<DownloadQueueItem, DownloadQueueAdapter.VH>(Diff) {
 
     class VH(view: View) : RecyclerView.ViewHolder(view) {
@@ -30,7 +31,9 @@ class DownloadQueueAdapter(
         holder.detail.text = buildString {
             append(item.chapterName)
             append(" • ")
-            if (item.downloading) {
+            if (item.paused) {
+                append(if (item.downloading) "Paused · ${item.progress}%" else "Paused · Queued")
+            } else if (item.downloading) {
                 append(if (item.progress > 0) "Downloading · ${item.progress}%" else "Starting download…")
             } else {
                 append("Queued")
@@ -40,6 +43,12 @@ class DownloadQueueAdapter(
         holder.progress.isIndeterminate = item.downloading && item.progress == 0
         if (item.progress > 0) holder.progress.progress = item.progress
         holder.itemView.setOnClickListener { if (item.mangaId != null) onClick(item) }
+        holder.itemView.setOnLongClickListener {
+            if (item.chapterId == null) false else {
+                onActions(item)
+                true
+            }
+        }
     }
 
     private object Diff : DiffUtil.ItemCallback<DownloadQueueItem>() {

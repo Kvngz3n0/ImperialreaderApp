@@ -24,6 +24,7 @@ import com.imperialreader.R
 import com.imperialreader.data.db.CategoryEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.LibraryItem
+import com.imperialreader.data.update.LibraryRefreshNotification
 import com.imperialreader.ui.browse.GlobalSearchActivity
 import com.imperialreader.ui.common.CardItem
 import com.imperialreader.ui.common.LibraryActions
@@ -80,7 +81,16 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             },
             onLongClick = { item ->
                 val id = item.tag as Long
-                if (selectionMode) toggleSelection(id) else showItemMenu(id, item.title)
+                if (selectionMode) {
+                    if (id in selectedIds) showItemMenu(id, item.title)
+                    else toggleSelection(id)
+                } else {
+                    selectionMode = true
+                    selectedIds.clear()
+                    selectedIds.add(id)
+                    updateSelectionMenu()
+                    tick.value = tick.value + 1
+                }
             }
         )
         recycler.layoutManager = GridLayoutManager(requireContext(), prefs.libraryColumns)
@@ -160,15 +170,19 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
         swipe.setOnRefreshListener {
             viewLifecycleOwner.lifecycleScope.launch {
-                sprite.start()
+                sprite.start(speed = 1.5f)
+                LibraryRefreshNotification.show(requireContext(), 0, 0)
                 try {
-                    val n = app.repo.updateLibrary()
+                    val n = app.repo.updateLibrary(onProgress = { done, total ->
+                        LibraryRefreshNotification.show(requireContext(), done, total)
+                    })
                     requireContext().toast(if (n > 0) "$n new chapter(s)" else "Library is up to date")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     requireContext().toast("Update failed: ${e.message}")
                 } finally {
+                    LibraryRefreshNotification.clear(requireContext())
                     sprite.stop()
                     swipe.isRefreshing = false
                 }
@@ -481,38 +495,54 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private fun showItemMenu(mangaId: Long, title: String) {
         val ctx = requireContext()
-        val options = arrayOf("Select for bulk actions", "Mark as read", "Mark as unread", "Change category", "Remove from library")
+        val options = arrayOf(
+            "Mark as read",
+            "Mark as unread",
+            "Select all",
+            "Cancel selection",
+            "Change category",
+            "Remove from library"
+        )
         MaterialAlertDialogBuilder(ctx)
             .setTitle(title)
             .setItems(options) { _, which ->
-                if (which == 0) {
-                    selectionMode = true
-                    selectedIds.add(mangaId)
+                if (which == 2) {
+                    val ids = visibleItems.map { it.manga.id }
+                    selectedIds.addAll(ids)
+                    selectionMode = selectedIds.isNotEmpty()
                     updateSelectionMenu()
                     tick.value = tick.value + 1
+                    return@setItems
+                }
+                if (which == 3) {
+                    cancelSelection()
+                    return@setItems
+                }
+                val ids = selectedIds.toList().ifEmpty { listOf(mangaId) }
+                if (which == 0 || which == 1) {
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        val dao = ctx.app.db.chapterDao()
+                        ids.chunked(400).forEach { dao.setReadForManga(it, which == 0) }
+                        ctx.toast("Marked ${ids.size} entr${if (ids.size == 1) "y" else "ies"} as ${if (which == 0) "read" else "unread"}")
+                        cancelSelection()
+                    }
                     return@setItems
                 }
                 viewLifecycleOwner.lifecycleScope.launch {
                     val db = ctx.app.db
                     val manga = db.mangaDao().getById(mangaId) ?: return@launch
                     when (which) {
-                        1 -> {
-                            db.chapterDao().setReadForManga(mangaId, true)
-                            ctx.toast("Marked all chapters as read")
+                        4 -> {
+                            val picked = LibraryActions.chooseCategory(ctx, manga.categoryId) ?: return@launch
+                            ids.chunked(400).forEach { db.mangaDao().setCategory(it, picked) }
+                            cancelSelection()
                         }
-                        2 -> {
-                            db.chapterDao().setReadForManga(mangaId, false)
-                            ctx.toast("Marked all chapters as unread")
-                        }
-                        3 -> {
-                            val picked = LibraryActions.chooseCategory(ctx, manga.categoryId)
-                            if (picked != null) db.mangaDao().setCategory(mangaId, picked)
-                        }
-                        4 -> showRemoveOptions(1) { deleteDownloads ->
+                        5 -> showRemoveOptions(ids.size) { deleteDownloads ->
                             viewLifecycleOwner.lifecycleScope.launch {
                                 try {
-                                    removeEntries(listOf(mangaId), deleteDownloads)
-                                    ctx.toast("Removed from library")
+                                    removeEntries(ids, deleteDownloads)
+                                    ctx.toast("Removed ${ids.size} entr${if (ids.size == 1) "y" else "ies"} from library")
+                                    cancelSelection()
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
@@ -532,11 +562,18 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         val prefs = requireContext().app.prefs
         var list = items.filter { q.isBlank() || it.manga.title.contains(q, ignoreCase = true) }
         if (category >= 0) list = list.filter { it.manga.categoryId == category }
-        if (prefs.filterUnread) list = list.filter { it.unread > 0 }
-        if (prefs.filterBookmarked) list = list.filter { it.bookmarked > 0 }
-        if (prefs.filterDownloaded || prefs.downloadedOnly) {
-            list = list.filter { it.downloadedCount > 0 || it.manga.source == LOCAL_SOURCE_ID }
+        fun filter(mode: Int, matches: (LibraryItem) -> Boolean) {
+            when (mode) {
+                com.imperialreader.data.AppPrefs.FILTER_INCLUDE -> list = list.filter(matches)
+                com.imperialreader.data.AppPrefs.FILTER_EXCLUDE -> list = list.filterNot(matches)
+            }
         }
+        filter(prefs.unreadFilterMode) { it.unread > 0 }
+        filter(prefs.bookmarkedFilterMode) { it.bookmarked > 0 }
+        val isDownloaded: (LibraryItem) -> Boolean =
+            { it.downloadedCount > 0 || it.manga.source == LOCAL_SOURCE_ID }
+        if (prefs.downloadedOnly) list = list.filter(isDownloaded)
+        filter(prefs.downloadedFilterMode, isDownloaded)
         return when (prefs.sortMode) {
             1 -> list.sortedByDescending { it.lastRead ?: 0L }
             2 -> list.sortedByDescending { it.unread }
@@ -572,19 +609,48 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private fun showFilterDialog() {
         val prefs = requireContext().app.prefs
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle("Filter")
-            .setMultiChoiceItems(
-                arrayOf("Unread", "Downloaded", "Bookmarked"),
-                booleanArrayOf(prefs.filterUnread, prefs.filterDownloaded, prefs.filterBookmarked)
-            ) { _, which, checked ->
-                when (which) {
-                    0 -> prefs.filterUnread = checked
-                    1 -> prefs.filterDownloaded = checked
-                    else -> prefs.filterBookmarked = checked
-                }
+        val context = requireContext()
+        val rows = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(context.dp(24), context.dp(8), context.dp(24), context.dp(8))
+        }
+        val states = listOf("— Off", "✓ Include", "× Exclude")
+        val getMode = listOf(
+            { prefs.unreadFilterMode },
+            { prefs.downloadedFilterMode },
+            { prefs.bookmarkedFilterMode }
+        )
+        val setMode: List<(Int) -> Unit> = listOf(
+            { prefs.unreadFilterMode = it },
+            { prefs.downloadedFilterMode = it },
+            { prefs.bookmarkedFilterMode = it }
+        )
+        listOf("Unread", "Downloaded", "Bookmarked").forEachIndexed { index, title ->
+            val status = Button(context)
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, context.dp(4), 0, context.dp(4))
+            }
+            row.addView(TextView(context).apply {
+                text = title
+                textSize = 16f
+            }, LinearLayout.LayoutParams(0, context.dp(48), 1f))
+            row.addView(status, LinearLayout.LayoutParams(context.dp(120), context.dp(48)))
+            fun updateStatus() {
+                status.text = states[getMode[index]().coerceIn(states.indices)]
+            }
+            updateStatus()
+            status.setOnClickListener {
+                setMode[index]((getMode[index]() + 1) % states.size)
+                updateStatus()
                 tick.value = tick.value + 1
             }
+            rows.addView(row)
+        }
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("Filter")
+            .setView(rows)
             .setPositiveButton("Done", null)
             .show()
     }

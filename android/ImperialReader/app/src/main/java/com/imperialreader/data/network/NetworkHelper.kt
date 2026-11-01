@@ -36,6 +36,7 @@ class NetworkHelper(@Suppress("UNUSED_PARAMETER") context: Context) {
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .addInterceptor(PhiliaScansImageInterceptor())
         .addInterceptor { chain ->
             val req = chain.request()
             val b = req.newBuilder()

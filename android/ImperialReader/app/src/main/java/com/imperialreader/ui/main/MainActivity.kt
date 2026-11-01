@@ -4,14 +4,18 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.storage.LocalScanner
+import com.imperialreader.data.update.AutomaticAppUpdateScheduler
+import com.imperialreader.data.update.LibraryUpdateScheduler
+import com.imperialreader.data.update.LibraryRefreshNotification
 import com.imperialreader.util.app
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
 import androidx.fragment.app.Fragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.imperialreader.R
@@ -21,7 +25,7 @@ import com.imperialreader.ui.library.LibraryFragment
 import com.imperialreader.ui.more.MoreFragment
 import com.imperialreader.ui.updates.UpdatesFragment
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : androidx.appcompat.app.AppCompatActivity() {
 
     companion object {
         private var refreshedThisProcess = false
@@ -43,15 +47,34 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             nav.selectedItemId = R.id.nav_library
             AutomaticCoverRefreshScheduler.onAppStart(this)
+            LibraryUpdateScheduler.onAppStart(this)
+            AutomaticAppUpdateScheduler.onAppStart(this)
         }
 
         if (app.prefs.localCovers && app.prefs.storageUri != null && !scannedThisProcess) {
             scannedThisProcess = true
             lifecycleScope.launch { runCatching { LocalScanner(applicationContext).scan() } }
         }
-        if (app.prefs.refreshOnStart && !refreshedThisProcess) {
+        val updateInterval = TimeUnit.MINUTES.toMillis(app.prefs.libraryUpdateIntervalMinutes)
+        val updateDue = updateInterval == 0L ||
+            System.currentTimeMillis() - app.prefs.libraryUpdatedAt >= updateInterval
+        if (app.prefs.refreshOnStart && app.prefs.libraryUpdateIntervalMinutes == 0L &&
+            updateDue && !refreshedThisProcess
+        ) {
             refreshedThisProcess = true
-            lifecycleScope.launch { runCatching { app.repo.updateLibrary() } }
+            lifecycleScope.launch {
+                LibraryRefreshNotification.show(this@MainActivity, 0, 0)
+                try {
+                    app.repo.updateLibrary(onProgress = { done, total ->
+                        LibraryRefreshNotification.show(this@MainActivity, done, total)
+                    })
+                    app.prefs.libraryUpdatedAt = System.currentTimeMillis()
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Automatic library update failed", e)
+                } finally {
+                    LibraryRefreshNotification.clear(this@MainActivity)
+                }
+            }
         }
 
         if (Build.VERSION.SDK_INT >= 33 &&

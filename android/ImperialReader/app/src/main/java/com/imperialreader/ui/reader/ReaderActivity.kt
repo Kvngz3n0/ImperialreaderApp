@@ -13,12 +13,12 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -40,7 +40,7 @@ import kotlinx.coroutines.launch
 import java.io.IOException
 import kotlin.math.abs
 
-class ReaderActivity : AppCompatActivity() {
+class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"
@@ -73,11 +73,23 @@ class ReaderActivity : AppCompatActivity() {
     private var pages: List<String> = emptyList()
     private var headers: Map<String, String> = emptyMap()
     private var currentPage = 0
+    private var pageZoomed = false
     private var mode = AppPrefs.READER_RTL
     private var overlaysVisible = false
     private var restoring = false
     private var chapterTransitionActive = false
     private var loadJob: Job? = null
+    private var pendingSaveBitmap: android.graphics.Bitmap? = null
+    private val requestGalleryPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            val bitmap = pendingSaveBitmap
+            pendingSaveBitmap = null
+            if (granted && bitmap != null) savePageBitmap(bitmap)
+            else if (!granted) {
+                bitmap?.recycle()
+                toast("Storage permission is needed to save pages")
+            }
+        }
 
     private val pagerMode get() = mode != AppPrefs.READER_VERTICAL
     private val rtl get() = mode == AppPrefs.READER_RTL
@@ -137,7 +149,9 @@ class ReaderActivity : AppCompatActivity() {
 
         pager.registerOnPageChangeCallback(object : ViewPager2.OnPageChangeCallback() {
             override fun onPageSelected(position: Int) {
-                if (pagerMode) onPageChanged(position)
+                if (pagerMode) {
+                    onPageChanged(position)
+                }
             }
         })
         webtoon.addOnScrollListener(object : RecyclerView.OnScrollListener() {
@@ -150,25 +164,26 @@ class ReaderActivity : AppCompatActivity() {
                 updateNextChapterPrompt()
             }
         })
-        var pulledNextChapter = false
+        var pulledChapter = false
         val webtoonPullGesture = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                if (e1 == null || e2.rawY >= e1.rawY || webtoon.canScrollVertically(1) ||
-                    index >= chapters.lastIndex || pages.isEmpty()
-                ) return false
+                if (e1 == null || pages.isEmpty() || pageZoomed) return false
+                val towardNext = e2.rawY < e1.rawY && !webtoon.canScrollVertically(1) && index < chapters.lastIndex
+                val towardPrevious = e2.rawY > e1.rawY && !webtoon.canScrollVertically(-1) && index > 0
+                if (!towardNext && !towardPrevious) return false
                 webtoon.stopScroll()
-                pulledNextChapter = true
-                openAdjacent(1)
+                pulledChapter = true
+                openAdjacent(if (towardNext) 1 else -1)
                 return true
             }
         })
         webtoon.setOnTouchListener { _, event ->
             webtoonPullGesture.onTouchEvent(event)
-            val consume = event.actionMasked == MotionEvent.ACTION_UP && pulledNextChapter
+            val consume = event.actionMasked == MotionEvent.ACTION_UP && pulledChapter
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                pulledNextChapter = false
+                pulledChapter = false
             }
             consume
         }
@@ -182,7 +197,7 @@ class ReaderActivity : AppCompatActivity() {
             }
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
-                if (!pagerMode || pages.isEmpty() || e1 == null || !isInside(pager, e1)) return false
+                if (!pagerMode || pageZoomed || pages.isEmpty() || e1 == null || !isInside(pager, e1)) return false
                 if (overlaysVisible && (isInside(topBar, e1) || isInside(bottomBar, e1))) return false
                 val dx = e2.rawX - e1.rawX
                 val dy = e2.rawY - e1.rawY
@@ -272,7 +287,20 @@ class ReaderActivity : AppCompatActivity() {
         progressBar.visibility = View.GONE
         errorView.visibility = View.GONE
         restoring = true
-        val adapter = PageAdapter(headers, webtoon = !pagerMode)
+        val adapter = PageAdapter(headers, webtoon = !pagerMode, onSavePage = { image, pageUrl ->
+            if (image.drawable == null) toast("Wait for the page to finish loading before saving it")
+            else lifecycleScope.launch {
+                try {
+                    confirmSavePage(GalleryPageSaver.loadPageBitmap(this@ReaderActivity, pageUrl, headers))
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    toast("Could not load the selected page: ${e.message}")
+                }
+            }
+        }, onZoomChanged = { position, zoomed ->
+            if (position == currentPage) pageZoomed = zoomed
+        })
         adapter.pages = pages
 
         if (pagerMode) {
@@ -302,10 +330,47 @@ class ReaderActivity : AppCompatActivity() {
         root.postDelayed({ restoring = false }, 500)
     }
 
+    private fun savePageBitmap(bitmap: android.graphics.Bitmap) {
+        lifecycleScope.launch {
+            try {
+                GalleryPageSaver.save(this@ReaderActivity, bitmap)
+                toast("Page saved to Pictures/ImperialReader")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                toast("Couldn't save page: ${e.message}")
+            } finally {
+                bitmap.recycle()
+            }
+        }
+    }
+
+    private fun confirmSavePage(bitmap: android.graphics.Bitmap) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Save page to gallery?")
+            .setMessage("Save this page to Pictures/ImperialReader?")
+            .setNegativeButton("Cancel") { _, _ -> bitmap.recycle() }
+            .setOnCancelListener { bitmap.recycle() }
+            .setPositiveButton("Save") { _, _ ->
+                if (GalleryPageSaver.hasLegacyPermission(this)) savePageBitmap(bitmap)
+                else {
+                    pendingSaveBitmap?.recycle()
+                    pendingSaveBitmap = bitmap
+                    requestGalleryPermission.launch(GalleryPageSaver.WRITE_PERMISSION)
+                }
+            }
+            .show()
+    }
+
     // ------------------------------------------------------------------ paging
 
     private fun onPageChanged(position: Int) {
         if (position < 0 || position >= pages.size) return
+        if (position != currentPage) {
+            pageZoomed = false
+            val adapter = if (pagerMode) pager.adapter as? PageAdapter else webtoon.adapter as? PageAdapter
+            adapter?.resetZoom(currentPage)
+        }
         currentPage = position
         updatePageUi(position)
         if (restoring) return
