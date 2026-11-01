@@ -15,13 +15,16 @@ import com.imperialreader.util.app
 import com.imperialreader.util.mimeForExt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -29,6 +32,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.supervisorScope
+import okhttp3.Call
 import okhttp3.Request
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
@@ -40,7 +45,8 @@ data class DownloadQueueItem(
     val chapterId: Long?,
     val chapterName: String,
     val progress: Int,
-    val downloading: Boolean
+    val downloading: Boolean,
+    val paused: Boolean = false
 )
 
 /**
@@ -51,11 +57,16 @@ data class DownloadQueueItem(
 class DownloadManager(private val ctx: Context) {
 
     private data class Task(val manga: MangaEntity, val chapter: ChapterEntity)
+    private data class TaskOutcome(val failure: Exception? = null, val paused: Boolean = false)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val queue = ArrayDeque<Task>()
     private var worker: Job? = null
     private var activeTask: Task? = null
+    private var activeDownload: Deferred<Unit>? = null
+    private val activeCalls = mutableSetOf<Call>()
+    private val pausedMangaIds = mutableSetOf<Long>()
+    private val pauseRequestedChapterIds = mutableSetOf<Long>()
     private val externalTasks = LinkedHashMap<String, DownloadQueueItem>()
 
     private val _progress = MutableStateFlow<Map<Long, Int>>(emptyMap())
@@ -81,7 +92,8 @@ class DownloadManager(private val ctx: Context) {
                 add(
                     DownloadQueueItem(
                         "chapter:${task.chapter.id}", task.manga.id, task.manga.title, task.chapter.id, task.chapter.name,
-                        values[task.chapter.id] ?: 0, downloading = true
+                        values[task.chapter.id] ?: 0, downloading = true,
+                        paused = task.manga.id in pausedMangaIds
                     )
                 )
             }
@@ -89,7 +101,8 @@ class DownloadManager(private val ctx: Context) {
                 add(
                     DownloadQueueItem(
                         "chapter:${task.chapter.id}", task.manga.id, task.manga.title, task.chapter.id, task.chapter.name,
-                        values[task.chapter.id] ?: 0, downloading = false
+                        values[task.chapter.id] ?: 0, downloading = false,
+                        paused = task.manga.id in pausedMangaIds
                     )
                 )
             }
@@ -135,28 +148,57 @@ class DownloadManager(private val ctx: Context) {
     }
 
     @Synchronized
+    fun pauseManga(mangaId: Long) {
+        pausedMangaIds += mangaId
+        activeTask?.takeIf { it.manga.id == mangaId }?.let {
+            pauseRequestedChapterIds += it.chapter.id
+            activeDownload?.cancel()
+            activeCalls.forEach(Call::cancel)
+        }
+        publishQueueLocked()
+    }
+
+    @Synchronized
+    fun resumeManga(mangaId: Long) {
+        pausedMangaIds -= mangaId
+        publishQueueLocked()
+        startWorker()
+    }
+
+    @Synchronized
     private fun startWorker() {
         if (worker?.isActive == true) return
-        if (queue.isEmpty()) return
+        if (queue.none { it.manga.id !in pausedMangaIds }) return
         DownloadService.start(ctx)
         worker = scope.launch {
             try {
                 while (true) {
                     val task = synchronized(this@DownloadManager) {
-                        queue.removeFirstOrNull().also {
+                        val next = queue.indexOfFirst { it.manga.id !in pausedMangaIds }
+                        (if (next >= 0) queue.removeAt(next) else null).also {
                             activeTask = it
                             publishQueueLocked()
                         }
                     } ?: break
-                    try {
-                        download(task)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
+
+                    val outcome = runTask(task)
+                    val alreadyDownloaded =
+                        ctx.app.db.chapterDao().getById(task.chapter.id)?.downloaded == true
+                    if (!alreadyDownloaded && (outcome.paused || isMangaPaused(task.manga.id))) {
                         ctx.app.storage.deleteDownload(task.manga, task.chapter)
-                        _errors.tryEmit("Download failed: ${task.chapter.name} (${e.message})")
-                    } finally {
                         synchronized(this@DownloadManager) {
+                            pauseRequestedChapterIds -= task.chapter.id
+                            if (queue.none { it.chapter.id == task.chapter.id }) queue.addFirst(task)
+                            if (activeTask?.chapter?.id == task.chapter.id) activeTask = null
+                            publishQueueLocked()
+                        }
+                    } else {
+                        if (outcome.failure != null) {
+                            ctx.app.storage.deleteDownload(task.manga, task.chapter)
+                            _errors.tryEmit("Download failed: ${task.chapter.name} (${outcome.failure.message})")
+                        }
+                        synchronized(this@DownloadManager) {
+                            pauseRequestedChapterIds -= task.chapter.id
                             _progress.value = _progress.value - task.chapter.id
                             if (activeTask?.chapter?.id == task.chapter.id) activeTask = null
                             publishQueueLocked()
@@ -167,11 +209,46 @@ class DownloadManager(private val ctx: Context) {
                 DownloadService.stop(ctx)
                 synchronized(this@DownloadManager) {
                     worker = null
-                    if (queue.isNotEmpty()) startWorker()
+                    activeDownload = null
+                    activeCalls.clear()
+                    activeTask = null
+                    publishQueueLocked()
+                    if (queue.any { it.manga.id !in pausedMangaIds }) startWorker()
                 }
             }
         }
     }
+
+    private suspend fun runTask(task: Task): TaskOutcome = supervisorScope {
+        val download = async { download(task) }
+        synchronized(this@DownloadManager) {
+            activeDownload = download
+            if (task.manga.id in pausedMangaIds) download.cancel()
+        }
+        try {
+            download.await()
+            TaskOutcome()
+        } catch (e: CancellationException) {
+            if (isMangaPaused(task.manga.id) || isPauseRequested(task.chapter.id)) {
+                TaskOutcome(paused = true)
+            } else throw e
+        } catch (e: Exception) {
+            if (isMangaPaused(task.manga.id) || isPauseRequested(task.chapter.id)) {
+                TaskOutcome(paused = true)
+            } else TaskOutcome(failure = e)
+        } finally {
+            synchronized(this@DownloadManager) {
+                if (activeDownload === download) activeDownload = null
+                activeCalls.clear()
+            }
+        }
+    }
+
+    @Synchronized
+    private fun isMangaPaused(mangaId: Long): Boolean = mangaId in pausedMangaIds
+
+    @Synchronized
+    private fun isPauseRequested(chapterId: Long): Boolean = chapterId in pauseRequestedChapterIds
 
     private suspend fun download(task: Task) {
         val app = ctx.app
@@ -196,8 +273,11 @@ class DownloadManager(private val ctx: Context) {
         coroutineScope {
             pages.mapIndexed { index, url ->
                 async {
+                    currentCoroutineContext().ensureActive()
                     sem.withPermit {
-                        downloadPage(loaded.headers, url, index, dir)
+                        currentCoroutineContext().ensureActive()
+                        downloadPage(loaded.headers, url, index, dir, task.manga.id, task.chapter.id)
+                        currentCoroutineContext().ensureActive()
                         setProgress(task.chapter.id, done.incrementAndGet() * 100 / pages.size)
                     }
                 }
@@ -206,50 +286,69 @@ class DownloadManager(private val ctx: Context) {
         app.db.chapterDao().setDownloaded(task.chapter.id, true)
     }
 
-    private suspend fun downloadPage(headers: Map<String, String>, url: String, index: Int, dir: DocumentFile) {
+    private suspend fun downloadPage(
+        headers: Map<String, String>,
+        url: String,
+        index: Int,
+        dir: DocumentFile,
+        mangaId: Long,
+        chapterId: Long
+    ) {
         var lastError: Exception? = null
         for (attempt in 0 until 3) {
+            currentCoroutineContext().ensureActive()
             var created: DocumentFile? = null
             try {
                 val request = Request.Builder().url(url).apply {
                     headers.forEach { (k, v) -> header(k, v) }
                 }.build()
-                ctx.app.network.client.newCall(request).execute().use { resp ->
-                    if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-                    val ct = resp.header("Content-Type").orEmpty()
-                    val scrambleOffset = MangaFirePageTransform.offset(url)
-                    val ext = if (scrambleOffset != null) "jpg" else when {
-                        "png" in ct -> "png"
-                        "webp" in ct -> "webp"
-                        "gif" in ct -> "gif"
-                        "avif" in ct -> "avif"
-                        else -> "jpg"
-                    }
-                    val file = dir.createFile(mimeForExt(ext), "%03d.%s".format(index + 1, ext))
-                        ?: throw IOException("Cannot create file")
-                    created = file
-                    val out = ctx.contentResolver.openOutputStream(file.uri, "w")
-                        ?: throw IOException("Cannot open file for writing")
-                    out.use {
-                        if (scrambleOffset == null) {
-                            resp.body!!.byteStream().copyTo(it)
-                        } else {
-                            val bytes = resp.body!!.bytes()
-                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                ?: throw IOException("Could not decode a MangaFire page image")
-                            val transformed = MangaFirePageTransform.unscramble(bitmap, scrambleOffset)
-                            if (!transformed.compress(Bitmap.CompressFormat.JPEG, 95, it)) {
-                                throw IOException("Could not save the decoded MangaFire page image")
+                val pageCall = ctx.app.network.client.newCall(request)
+                synchronized(this) {
+                    if (mangaId in pausedMangaIds) pageCall.cancel() else activeCalls += pageCall
+                }
+                try {
+                    pageCall.execute().use { resp ->
+                        if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+                        val ct = resp.header("Content-Type").orEmpty()
+                        val scrambleOffset = MangaFirePageTransform.offset(url)
+                        val ext = if (scrambleOffset != null) "jpg" else when {
+                            "png" in ct -> "png"
+                            "webp" in ct -> "webp"
+                            "gif" in ct -> "gif"
+                            "avif" in ct -> "avif"
+                            else -> "jpg"
+                        }
+                        val file = dir.createFile(mimeForExt(ext), "%03d.%s".format(index + 1, ext))
+                            ?: throw IOException("Cannot create file")
+                        created = file
+                        val out = ctx.contentResolver.openOutputStream(file.uri, "w")
+                            ?: throw IOException("Cannot open file for writing")
+                        out.use {
+                            if (scrambleOffset == null) {
+                                resp.body!!.byteStream().copyTo(it)
+                            } else {
+                                val bytes = resp.body!!.bytes()
+                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                    ?: throw IOException("Could not decode a MangaFire page image")
+                                val transformed = MangaFirePageTransform.unscramble(bitmap, scrambleOffset)
+                                if (!transformed.compress(Bitmap.CompressFormat.JPEG, 95, it)) {
+                                    throw IOException("Could not save the decoded MangaFire page image")
+                                }
+                                if (transformed !== bitmap) transformed.recycle()
+                                bitmap.recycle()
                             }
-                            if (transformed !== bitmap) transformed.recycle()
-                            bitmap.recycle()
                         }
                     }
+                } finally {
+                    synchronized(this) { activeCalls -= pageCall }
                 }
                 return
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (isMangaPaused(mangaId) || isPauseRequested(chapterId)) {
+                    throw CancellationException("Download paused")
+                }
                 lastError = e
                 created?.delete()
                 delay(1000L * (attempt + 1))

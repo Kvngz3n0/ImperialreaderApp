@@ -26,16 +26,16 @@ For manga and comics, tap the reader to show controls. Choose left-to-right, rig
 ### Read your own files
 
 1. In **More → Storage folder**, choose a folder and grant access. Imperial Reader creates `local/`, `downloads/`, and `autobackup/` inside it.
-2. Put local files under `local/<Title>/`. Each archive, PDF, EPUB, or image subfolder is treated as a chapter. Supported archive formats include CBZ, ZIP, CBR, and RAR.
+2. Put local files under `local/<Title>/`. Each archive, PDF, EPUB, PSD, CLIP, or image subfolder is treated as a chapter. PSD and CLIP files use an embedded flattened preview when available; layered editing is not supported.
 3. Choose **More → Scan local library** to import or refresh your local titles.
 
-PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs, or browse supported web-novel catalogs including NovelArrow. Downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
+PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs and PDFs, or browse supported web-novel catalogs including NovelArrow. Downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
 
 ## What it can do
 
 ### Discover and search
 
-- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources.
+- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including RavenScans.org, AllPornComic, Pawchive, and Comix.to.
 - Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and supported web-novel sites.
 - Search across online catalogs from **Browse** or from the library's global search. Global search preserves same-title results from separate catalogs, combines manga sources when requested, and offers optional genre/tag and artist filters.
 - Add a custom manga site by name and URL. Imperial Reader attempts to detect supported site engines when you first open it.
@@ -47,7 +47,8 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 - Save titles to your library and group them into custom categories.
 - Search, sort, and filter library entries, including by unread chapters, bookmarks, and downloaded chapters.
 - Select multiple titles to move them between categories or remove them from the library.
-- See unread and downloaded/local badges, with display options in Settings.
+- See unread, downloaded/local, and new-chapter counts, with display options in Settings.
+- Set a custom cover for a title from its details screen.
 - Refresh a title's chapter list or update the library for new chapters.
 
 ### Read, track, and download
@@ -55,15 +56,16 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 - Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts.
 - Resume reading progress, move between chapters, and optionally use screen-edge taps or volume keys for page navigation.
 - Bookmark chapters, mark chapters read or unread, and see reading history. Incognito mode disables reading-history entries.
-- Queue chapter downloads, follow the queue in **More**, and read downloaded chapters offline.
+- Queue chapter downloads, follow the queue in **More**, and read downloaded chapters offline. Large multi-chapter downloads are grouped by title and can be paused or resumed together.
 - Browse and read EPUBs and web novels, seek between EPUB sections, resume saved chapter/page progress, adjust text size and theme, and listen with device text-to-speech.
 - Optionally show only downloaded titles in the library.
 
 ### Local files and backups
 
-- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, and EPUB files as library titles.
+- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, and CLIP files as library titles. PSD and CLIP reading depends on an embedded flattened preview.
 - Read local titles from the library and refresh the scan when files change.
 - Choose where downloads and local files are stored; without a selected folder, the app uses private app storage.
+- Add a profile picture from **More**.
 - Export or restore a JSON backup containing library titles, categories, chapter read/bookmark/progress state, and history. Restore merges with the current library rather than deleting it.
 - Create automatic backups manually or let the app run them periodically; it keeps a rolling set of the five most recent automatic backups.
 

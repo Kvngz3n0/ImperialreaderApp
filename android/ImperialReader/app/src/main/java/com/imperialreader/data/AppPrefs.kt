@@ -70,6 +70,10 @@ class AppPrefs(context: Context) {
         get() = sp.getString("storage_uri", null)
         set(v) = sp.edit { putString("storage_uri", v) }
 
+    var profilePictureUri: String?
+        get() = sp.getString("profile_picture_uri", null)
+        set(value) = sp.edit { putString("profile_picture_uri", value) }
+
     var automaticBackupAt: Long
         get() = sp.getLong("automatic_backup_at", 0L)
         set(v) = sp.edit { putLong("automatic_backup_at", v) }

@@ -17,6 +17,20 @@
                 android:textSize="20sp" android:textStyle="bold"/>
         </LinearLayout>
 
+        <LinearLayout android:id="@+id/rowProfile" style="@style/MoreRow">
+            <ImageView
+                android:id="@+id/profileAvatar"
+                android:layout_width="48dp" android:layout_height="48dp"
+                android:layout_marginStart="16dp" android:layout_marginEnd="16dp"
+                android:src="@drawable/ic_profile"
+                android:contentDescription="profile picture"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView style="@style/MoreRowTitle" android:text="Profile picture"/>
+                <TextView style="@style/MoreRowSub" android:text="Tap to choose an image"/>
+            </LinearLayout>
+        </LinearLayout>
+
         <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/switchDownloadedOnly"
             android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -89,6 +103,16 @@
                 android:layout_weight="1" android:orientation="vertical">
                 <TextView style="@style/MoreRowTitle" android:text="Automatic backup"/>
                 <TextView android:id="@+id/autoBackupSub" style="@style/MoreRowSub"/>
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout android:id="@+id/rowAppUpdate" style="@style/MoreRow">
+            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_download" android:contentDescription="app update"/>
+            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:orientation="vertical">
+                <TextView style="@style/MoreRowTitle" android:text="Check for app updates"/>
+                <TextView android:id="@+id/appUpdateSub" style="@style/MoreRowSub"
+                    android:text="Install the latest APK from the V9 release"/>
             </LinearLayout>
         </LinearLayout>
 

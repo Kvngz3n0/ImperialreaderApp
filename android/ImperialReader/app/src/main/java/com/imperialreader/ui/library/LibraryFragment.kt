@@ -1,6 +1,7 @@
 package com.imperialreader.ui.library
 
 import android.os.Bundle
+import android.graphics.Color
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
@@ -65,6 +66,8 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
         toolbar = view.findViewById(R.id.toolbar)
         val swipe = view.findViewById<SwipeRefreshLayout>(R.id.swipe)
+        swipe.setColorSchemeColors(Color.TRANSPARENT)
+        swipe.setProgressBackgroundColorSchemeColor(Color.TRANSPARENT)
         val emptyView = view.findViewById<LinearLayout>(R.id.emptyView)
         val emptyText = view.findViewById<TextView>(R.id.emptyText)
         val btnGlobal = view.findViewById<Button>(R.id.btnGlobalSearch)
@@ -552,7 +555,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         return CardItem(
             key = "m${m.id}",
             title = m.title,
-            cover = m.coverUrl,
+            cover = m.displayCoverUrl,
             badge1 = if (prefs.showUnreadBadge && item.unread > 0) item.unread.toString() else null,
             badge2 = if (!prefs.showDownloadBadge) null else when {
                 m.source == LOCAL_SOURCE_ID -> "Local"

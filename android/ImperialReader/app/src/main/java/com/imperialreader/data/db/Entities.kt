@@ -20,13 +20,16 @@ data class MangaEntity(
     val genre: String? = null,
     val status: Int = 0,
     val coverUrl: String? = null,
+    val customCoverUri: String? = null,
     val favorite: Boolean = false,
     val dateAdded: Long = 0,
     val lastUpdate: Long = 0,
     val initialized: Boolean = false,
     /** 0 = Default (no category). */
     val categoryId: Long = 0
-)
+) {
+    val displayCoverUrl: String? get() = customCoverUri ?: coverUrl
+}
 
 @Entity(tableName = "categories")
 data class CategoryEntity(

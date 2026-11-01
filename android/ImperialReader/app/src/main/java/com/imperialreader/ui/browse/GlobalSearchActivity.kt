@@ -354,7 +354,7 @@ class GlobalSearchActivity : AppCompatActivity() {
                     sourceId = "library", sourceName = "In your library", loading = false, kind = KIND_LIBRARY,
                     cards = libraryMatches.map {
                         CardItem(
-                            key = "lib${it.id}", title = it.title, cover = it.coverUrl,
+                            key = "lib${it.id}", title = it.title, cover = it.displayCoverUrl,
                             headers = app.sources.get(it.source)?.imageHeaders() ?: emptyMap(), tag = it.id
                         )
                     }
@@ -490,7 +490,11 @@ class GlobalSearchActivity : AppCompatActivity() {
                 val cards = found.distinctBy { it.key }
                     .sortedWith(compareBy<BookItem> { searchRelevance(it.title, q) }.thenBy { it.title })
                     .map { item ->
-                    val badge = if (BookSources.get(item.sourceId)?.isWebNovel == true) "NOVEL" else "EPUB"
+                    val badge = when {
+                        BookSources.get(item.sourceId)?.isWebNovel == true -> "NOVEL"
+                        item.pdfUrl != null -> "PDF"
+                        else -> "EPUB"
+                    }
                     CardItem(key = item.key, title = item.title, cover = item.coverUrl, badge1 = badge, tag = item)
                 }
                 val errorText = errors.take(3).joinToString("\n")

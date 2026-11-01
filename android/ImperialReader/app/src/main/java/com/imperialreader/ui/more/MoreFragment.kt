@@ -1,10 +1,13 @@
 package com.imperialreader.ui.more
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.FileProvider
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -13,6 +16,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
+import coil.load
 import com.imperialreader.R
 import com.imperialreader.data.backup.BackupManager
 import com.imperialreader.data.storage.LocalScanner
@@ -34,6 +38,36 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     private lateinit var queueEmpty: TextView
     private lateinit var queueRecycler: RecyclerView
     private lateinit var queueAdapter: DownloadQueueAdapter
+    private lateinit var profileAvatar: ImageView
+    private lateinit var appUpdateSub: TextView
+
+    private val chooseProfilePicture =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                try {
+                    requireContext().contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                    requireContext().app.prefs.profilePictureUri = uri.toString()
+                    showProfilePicture(uri)
+                } catch (e: SecurityException) {
+                    requireContext().toast("Could not keep access to this picture: ${e.message}")
+                }
+            }
+        }
+
+    private val allowUnknownSources =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (requireContext().packageManager.canRequestPackageInstalls()) {
+                pendingUpdateApk?.let(::installUpdateApk)
+            } else {
+                pendingUpdateApk = null
+                appUpdateSub.text = "Allow installs from Imperial Reader to update"
+            }
+        }
+
+    private var pendingUpdateApk: java.io.File? = null
 
     private val createBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
@@ -86,26 +120,40 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         queueSummary = view.findViewById(R.id.queueSummary)
         queueEmpty = view.findViewById(R.id.queueEmpty)
         queueRecycler = view.findViewById(R.id.downloadQueue)
-        queueAdapter = DownloadQueueAdapter { item ->
-            item.mangaId?.let { startActivity(MangaDetailsActivity.intent(requireContext(), it)) }
-        }
+        queueAdapter = DownloadQueueAdapter(
+            onClick = { item ->
+                item.mangaId?.let { startActivity(MangaDetailsActivity.intent(requireContext(), it)) }
+            },
+            onPauseAllForEntry = { mangaId, allPaused ->
+                if (allPaused) requireContext().app.downloads.resumeManga(mangaId)
+                else requireContext().app.downloads.pauseManga(mangaId)
+            }
+        )
         queueRecycler.layoutManager = LinearLayoutManager(requireContext())
         queueRecycler.adapter = queueAdapter
         refreshAutomaticBackupText()
+        profileAvatar = view.findViewById(R.id.profileAvatar)
+        appUpdateSub = view.findViewById(R.id.appUpdateSub)
+        profileAvatar.setOnClickListener { chooseProfilePicture.launch(arrayOf("image/*")) }
+        view.findViewById<View>(R.id.rowProfile)
+            .setOnClickListener { chooseProfilePicture.launch(arrayOf("image/*")) }
+        prefs.profilePictureUri?.let { showProfilePicture(Uri.parse(it)) }
 
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 requireContext().app.downloads.queueItems.collect { items ->
-                    val active = items.count { it.downloading }
+                    val active = items.count { it.downloading && !it.paused }
+                    val paused = items.count { it.paused }
                     queueSummary.text = when {
                         items.isEmpty() -> "Nothing is queued"
+                        active == 0 && paused > 0 -> "$paused download(s) paused"
                         active == 0 -> "${items.size} chapter(s) waiting"
                         items.size == 1 -> "1 chapter downloading"
-                        else -> "$active downloading · ${items.size - active} queued"
+                        else -> "$active downloading · ${items.size - active - paused} queued · $paused paused"
                     }
                     queueEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
                     queueRecycler.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
-                    queueAdapter.submitList(items)
+                    queueAdapter.submitQueue(items)
                 }
             }
         }
@@ -123,6 +171,7 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         view.findViewById<View>(R.id.rowSettings).setOnClickListener {
             startActivity(Intent(requireContext(), SettingsActivity::class.java))
         }
+        view.findViewById<View>(R.id.rowAppUpdate).setOnClickListener { checkForAppUpdate() }
         view.findViewById<View>(R.id.rowBackup).setOnClickListener {
             MaterialAlertDialogBuilder(requireContext())
                 .setTitle("Backup and restore")
@@ -149,6 +198,60 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     private fun refreshStorageText() {
         storageSub.text = requireContext().app.storage.displayPath()
         refreshAutomaticBackupText()
+    }
+
+    private fun showProfilePicture(uri: Uri) {
+        profileAvatar.load(uri) {
+            placeholder(R.drawable.ic_profile)
+            error(R.drawable.ic_profile)
+        }
+    }
+
+    private fun checkForAppUpdate() {
+        appUpdateSub.text = "Checking the V9 release…"
+        viewLifecycleOwner.lifecycleScope.launch {
+            try {
+                val apk = com.imperialreader.data.update.AppUpdateManager(requireContext())
+                    .downloadLatestApk()
+                pendingUpdateApk = apk
+                appUpdateSub.text = "Update downloaded · tap to install"
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                    !requireContext().packageManager.canRequestPackageInstalls()
+                ) {
+                    allowUnknownSources.launch(
+                        Intent(
+                            android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                            Uri.parse("package:${requireContext().packageName}")
+                        )
+                    )
+                } else {
+                    installUpdateApk(apk)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                appUpdateSub.text = "Update check failed · tap to retry"
+                requireContext().toast("App update failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun installUpdateApk(apk: java.io.File) {
+        try {
+            val uri = FileProvider.getUriForFile(
+                requireContext(),
+                "${requireContext().packageName}.fileprovider",
+                apk
+            )
+            startActivity(
+                Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(uri, "application/vnd.android.package-archive")
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            )
+        } catch (e: Exception) {
+            appUpdateSub.text = "Could not open installer · tap to retry"
+            requireContext().toast("Could not start APK installer: ${e.message}")
+        }
     }
 
     override fun onResume() {

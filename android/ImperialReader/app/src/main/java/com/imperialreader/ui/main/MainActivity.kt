@@ -8,10 +8,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.util.app
 import kotlinx.coroutines.launch
+import androidx.lifecycle.Lifecycle
 import androidx.fragment.app.Fragment
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.imperialreader.R
@@ -43,6 +45,21 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             nav.selectedItemId = R.id.nav_library
             AutomaticCoverRefreshScheduler.onAppStart(this)
+        }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                app.db.chapterDao().observeUpdateCount().collect { count ->
+                    if (count > 0) {
+                        nav.getOrCreateBadge(R.id.nav_updates).apply {
+                            number = count
+                            maxCharacterCount = 3
+                        }
+                    } else {
+                        nav.removeBadge(R.id.nav_updates)
+                    }
+                }
+            }
         }
 
         if (app.prefs.localCovers && app.prefs.storageUri != null && !scannedThisProcess) {

@@ -2,6 +2,7 @@ package com.imperialreader.ui.details
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -11,6 +12,7 @@ import android.widget.ImageView
 import android.widget.PopupMenu
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -65,6 +67,22 @@ class MangaDetailsActivity : AppCompatActivity() {
     private val selectedChapterIds = linkedSetOf<Long>()
     private var chapterSelectionMode = false
     private var chapterSelectionAnchorId: Long? = null
+
+    private val chooseCustomCover =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                try {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (e: SecurityException) {
+                    toast("Could not keep access to the selected cover: ${e.message}")
+                    return@registerForActivityResult
+                }
+                lifecycleScope.launch {
+                    app.db.mangaDao().setCustomCover(mangaId, uri.toString())
+                    toast("Custom cover saved")
+                }
+            }
+        }
 
     private lateinit var toolbar: MaterialToolbar
     private lateinit var swipe: SwipeRefreshLayout
@@ -123,6 +141,8 @@ class MangaDetailsActivity : AppCompatActivity() {
                     app.db.mangaDao().observe(mangaId).filterNotNull().collect { m ->
                         manga = m
                         headerAdapter.update(m, rows.size)
+                        toolbar.menu.findItem(R.id.action_reset_custom_cover)?.isVisible =
+                            m.customCoverUri != null
                         updateChapterSelectionMenu()
                     }
                 }
@@ -262,6 +282,11 @@ class MangaDetailsActivity : AppCompatActivity() {
         when (id) {
             R.id.action_sort -> reversed.value = !reversed.value
             R.id.action_refresh -> refresh()
+            R.id.action_custom_cover -> chooseCustomCover.launch(arrayOf("image/*"))
+            R.id.action_reset_custom_cover -> lifecycleScope.launch {
+                app.db.mangaDao().setCustomCover(mangaId, null)
+                toast("Custom cover reset")
+            }
             R.id.action_download -> showDownloadDialog()
             R.id.action_mark_all_read -> markAll(true)
             R.id.action_mark_all_unread -> markAll(false)
@@ -499,7 +524,11 @@ class MangaDetailsActivity : AppCompatActivity() {
         override fun onBindViewHolder(h: VH, position: Int) {
             val manga = m ?: return
             val source = app.sources.get(manga.source)
-            h.cover.load(manga.coverUrl) { source?.imageHeaders()?.forEach { (k, v) -> addHeader(k, v) } }
+            h.cover.load(manga.displayCoverUrl) {
+                if (manga.customCoverUri == null) {
+                    source?.imageHeaders()?.forEach { (k, v) -> addHeader(k, v) }
+                }
+            }
             h.title.text = manga.title
             val people = listOfNotNull(manga.author, manga.artist?.takeIf { it != manga.author }).joinToString(" • ")
             h.author.text = people.ifBlank { "Unknown author" }

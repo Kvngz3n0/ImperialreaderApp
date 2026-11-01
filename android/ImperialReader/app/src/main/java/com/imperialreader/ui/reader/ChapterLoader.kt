@@ -11,6 +11,7 @@ import com.imperialreader.data.book.NovelChapterEpub
 import com.imperialreader.data.source.SChapter
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.storage.Archives
+import com.imperialreader.data.storage.LocalArtworkPreview
 import com.imperialreader.util.NaturalOrder
 import com.imperialreader.util.app
 import com.imperialreader.util.isImageName
@@ -60,13 +61,26 @@ object ChapterLoader {
         val name = doc.name.orEmpty().lowercase()
         return when {
             doc.isDirectory -> {
-                val files = doc.listFiles().filter { !it.isDirectory && isImageName(it.name) }
+                val files = doc.listFiles().filter {
+                    !it.isDirectory && (isImageName(it.name) || LocalArtworkPreview.supports(it.name))
+                }
                     .sortedWith(compareBy(NaturalOrder) { it.name ?: "" })
                 if (files.isEmpty()) throw IOException("No images in this folder")
-                LoadedChapter.Images(files.map { it.uri.toString() }, emptyMap())
+                LoadedChapter.Images(
+                    files.map { file ->
+                        if (LocalArtworkPreview.supports(file.name)) {
+                            LocalArtworkPreview.readerPage(ctx, file)
+                        } else {
+                            file.uri.toString()
+                        }
+                    },
+                    emptyMap()
+                )
             }
             name.endsWith(".epub") -> LoadedChapter.Epub(doc.uri.toString())
             name.endsWith(".pdf") -> LoadedChapter.Pdf(doc.uri.toString())
+            LocalArtworkPreview.supports(name) ->
+                LoadedChapter.Images(listOf(LocalArtworkPreview.readerPage(ctx, doc)), emptyMap())
             else -> {
                 val pages = extractArchive(ctx, doc)
                 if (pages.isEmpty()) throw IOException("No images found inside the archive")

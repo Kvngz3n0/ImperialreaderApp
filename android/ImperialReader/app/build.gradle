@@ -12,8 +12,8 @@ android {
         applicationId "com.imperialreader"
         minSdk 26
         targetSdk 34
-        versionCode 9
-        versionName "V8"
+        versionCode 12
+        versionName "V9"
     }
 
     buildTypes {

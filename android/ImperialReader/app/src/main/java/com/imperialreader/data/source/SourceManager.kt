@@ -29,7 +29,7 @@ class SourceManager(private val context: Context) {
             "https://philiascans.org",
             idOverride = "wp_philiascans_com"
         ),
-        WordPressSource("RavenScans", "https://ravenscans.com"),
+        RavenScansSource(),
         StoneScapeSource(),
         WordPressSource("Cocomic", "https://cocomic.co", idOverride = "wp_cocomics_com"),
         WordPressSource("RokariComics", "https://rokaricomics.com"),
@@ -41,6 +41,9 @@ class SourceManager(private val context: Context) {
         HentaraSource(),
         Manga18Source("Manga18 ME", "https://manga18.me"),
         MangaFireSource(),
+        GenericSource("AllPornComic", "https://allporncomic.com", nsfw = true),
+        PawchiveSource(),
+        GenericSource("Comix.to", "https://comix.to"),
         // Western comics
         WordPressSource("TritiniaScans", "https://tritinia.org"),
         WordPressSource("VortexScans", "https://vortexscans.org"),

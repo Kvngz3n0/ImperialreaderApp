@@ -35,7 +35,8 @@ data class BookItem(
     val epubUrl: String?,
     val description: String? = null,
     val artist: String? = null,
-    val genre: String? = null
+    val genre: String? = null,
+    val pdfUrl: String? = null
 ) {
     val key: String get() = "$sourceId:$id"
 }
@@ -67,6 +68,8 @@ interface BookSource {
     /** Direct link to the .epub file (some catalogs need a second request to find it). */
     suspend fun resolveEpubUrl(item: BookItem): String =
         item.epubUrl ?: throw IOException("No EPUB available for this title")
+    suspend fun resolvePdfUrl(item: BookItem): String =
+        item.pdfUrl ?: throw IOException("No PDF available for this title")
 }
 
 internal suspend fun fetchHtml(url: String): String = withContext(Dispatchers.IO) {
@@ -146,32 +149,52 @@ class GutenbergSource : BookSource {
     }
 }
 
-/** Internet Archive: openly downloadable EPUBs (lending-restricted books are excluded). */
+/** Internet Archive: openly downloadable EPUBs and PDFs (lending-restricted books are excluded). */
 class InternetArchiveSource : BookSource {
     override val id = "archive"
     override val name = "Internet Archive"
-    override val description = "EPUB library • openly downloadable books"
+    override val description = "EPUB and PDF library • openly downloadable books"
 
     override suspend fun popular(page: Int) = query("", page)
     override suspend fun search(query: String, page: Int) = query(query, page)
 
-    private suspend fun query(text: String, page: Int): List<BookItem> {
-        val base = "mediatype:texts AND format:EPUB AND -access-restricted-item:true"
+    private suspend fun query(text: String, page: Int): List<BookItem> = coroutineScope {
+        val epub = async { queryFormat(text, page, "EPUB") }
+        val pdf = async { queryFormat(text, page, "PDF") }
+        val results = linkedMapOf<String, BookItem>()
+        (epub.await() + pdf.await()).forEach { item ->
+            val existing = results[item.id]
+            results[item.id] = if (existing == null) item else existing.copy(
+                epubUrl = existing.epubUrl ?: item.epubUrl,
+                pdfUrl = existing.pdfUrl ?: item.pdfUrl
+            )
+        }
+        results.values.toList()
+    }
+
+    private suspend fun queryFormat(text: String, page: Int, format: String): List<BookItem> {
+        val base = "mediatype:texts AND format:$format AND -access-restricted-item:true"
         val q = if (text.isBlank()) base else "($text) AND $base"
         val url = "https://archive.org/advancedsearch.php?q=${enc(q)}" +
             "&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=creator&fl%5B%5D=description" +
-            "&sort%5B%5D=downloads+desc&rows=20&page=$page&output=json"
+            "&fl%5B%5D=format" +
+            "&sort%5B%5D=downloads+desc&rows=10&page=$page&output=json"
         val docs = JSONObject(fetchText(url)).optJSONObject("response")?.optJSONArray("docs") ?: JSONArray()
-        return (0 until docs.length()).map { i ->
+        return (0 until docs.length()).mapNotNull { i ->
             val d = docs.getJSONObject(i)
             val identifier = d.getString("identifier")
+            val formats = d.optJSONArray("format") ?: JSONArray()
+            val hasEpub = (0 until formats.length()).any { formats.optString(it).contains("EPUB", true) }
+            val hasPdf = (0 until formats.length()).any { formats.optString(it).contains("PDF", true) }
+            if (format == "EPUB" && !hasEpub || format == "PDF" && !hasPdf) return@mapNotNull null
             BookItem(
                 sourceId = id, sourceName = name, id = identifier,
                 title = firstString(d.opt("title")) ?: identifier,
                 author = firstString(d.opt("creator")),
                 coverUrl = "https://archive.org/services/img/$identifier",
-                epubUrl = null,
-                description = firstString(d.opt("description"))?.replace(Regex("<[^>]*>"), " ")?.trim()
+                epubUrl = if (format == "EPUB") "archive:epub" else null,
+                description = firstString(d.opt("description"))?.replace(Regex("<[^>]*>"), " ")?.trim(),
+                pdfUrl = if (format == "PDF") "archive:pdf" else null
             )
         }
     }
@@ -192,6 +215,19 @@ class InternetArchiveSource : BookSource {
             }
         }
         throw IOException("No EPUB file found for this item")
+    }
+
+    override suspend fun resolvePdfUrl(item: BookItem): String {
+        val files = JSONObject(fetchText("https://archive.org/metadata/${item.id}")).optJSONArray("files")
+            ?: JSONArray()
+        val pdf = (0 until files.length())
+            .mapNotNull { files.optJSONObject(it)?.optString("name") }
+            .filter { it.endsWith(".pdf", ignoreCase = true) }
+            .sortedBy { it.contains("_text.", ignoreCase = true) }
+            .firstOrNull()
+            ?: throw IOException("No PDF file found for this item")
+        val path = pdf.split('/').joinToString("/") { Uri.encode(it) }
+        return "https://archive.org/download/${item.id}/$path"
     }
 }
 
@@ -538,7 +574,7 @@ object BookSources {
         "NovelFire" to "https://novelfire.net", "NovelFull" to "https://novelfull.com",
         "PawRead" to "https://pawread.com", "Ranovel" to "https://ranovel.com",
         "ReadFrom.Net" to "https://readfrom.net", "ReadHive" to "https://readhive.org",
-        "Scribblehub" to "https://www.scribblehub.com", "ScrollersPub" to "https://scrollers.pub",
+        "ScribbleHub" to "https://www.scribblehub.com", "ScrollersPub" to "https://scrollers.pub",
         "SonicMTL" to "https://sonicmtl.com", "WTR-LAB" to "https://wtr-lab.com",
         "Wattpad" to "https://www.wattpad.com", "WuxiaBox" to "https://www.wuxiabox.com",
         "WuxiaClick" to "https://wuxia.click", "WuxiaWorld" to "https://www.wuxiaworld.com"

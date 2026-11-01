@@ -40,7 +40,8 @@ object BookActions {
                 if (source?.isWebNovel == true) {
                     setPositiveButton("Add to library") { _, _ -> addNovelToLibrary(activity, item) }
                 } else {
-                    setPositiveButton("Download & add to library") { _, _ -> addToLibrary(activity, item) }
+                    val kind = if (item.pdfUrl != null) "PDF" else "EPUB"
+                    setPositiveButton("Download $kind & add to library") { _, _ -> addToLibrary(activity, item) }
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -101,8 +102,10 @@ object BookActions {
     private fun addToLibrary(activity: AppCompatActivity, item: BookItem) {
         activity.toast("Downloading “${item.title}”…")
         val app = activity.applicationContext.app
-        val queueKey = "epub:${item.sourceId}:${item.key}"
-        app.downloads.reportExternalDownload(queueKey, item.title, "Downloading EPUB")
+        val isPdf = item.pdfUrl != null
+        val fileType = if (isPdf) "PDF" else "EPUB"
+        val queueKey = "${fileType.lowercase()}:${item.sourceId}:${item.key}"
+        app.downloads.reportExternalDownload(queueKey, item.title, "Downloading $fileType")
         activity.lifecycleScope.launch {
             try {
                 val id = withContext(Dispatchers.IO) { download(activity.applicationContext, item) }
@@ -124,10 +127,13 @@ object BookActions {
         val folderName = item.title.sanitize().take(100)
         val dir = app.storage.findOrCreateDir(local, folderName) ?: throw IOException("Cannot create folder")
 
-        val url = (BookSources.get(item.sourceId) ?: throw IOException("Unknown catalog")).resolveEpubUrl(item)
-        val fileName = "$folderName.epub"
+        val source = BookSources.get(item.sourceId) ?: throw IOException("Unknown catalog")
+        val url = if (item.pdfUrl != null) source.resolvePdfUrl(item) else source.resolveEpubUrl(item)
+        val extension = if (item.pdfUrl != null) "pdf" else "epub"
+        val mimeType = if (extension == "pdf") "application/pdf" else "application/epub+zip"
+        val fileName = "$folderName.$extension"
         dir.findFile(fileName)?.delete()
-        val file = dir.createFile("application/epub+zip", fileName) ?: throw IOException("Cannot create file")
+        val file = dir.createFile(mimeType, fileName) ?: throw IOException("Cannot create file")
 
         app.network.client.await(Request.Builder().url(url).build()).use { resp ->
             if (!resp.isSuccessful) {

@@ -130,7 +130,17 @@ class BookBrowseActivity : AppCompatActivity() {
                 hasMore = result.isNotEmpty()
                 page++
                 adapter.submitList(items.map {
-                    CardItem(key = it.key, title = it.title, cover = it.coverUrl, badge1 = if (source.isWebNovel) "NOVEL" else "EPUB", tag = it)
+                    CardItem(
+                        key = it.key,
+                        title = it.title,
+                        cover = it.coverUrl,
+                        badge1 = when {
+                            source.isWebNovel -> "NOVEL"
+                            it.pdfUrl != null -> "PDF"
+                            else -> "EPUB"
+                        },
+                        tag = it
+                    )
                 })
                 if (items.isEmpty()) show("Nothing found")
             } catch (e: CancellationException) {

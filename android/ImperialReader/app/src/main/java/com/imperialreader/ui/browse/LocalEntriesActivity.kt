@@ -112,7 +112,7 @@ class LocalEntriesActivity : AppCompatActivity() {
                 CardItem(
                     key = "local-${manga.id}",
                     title = manga.title,
-                    cover = manga.coverUrl,
+                    cover = manga.displayCoverUrl,
                     badge2 = if (manga.favorite) "In library" else "Local",
                     tag = manga.id
                 )
