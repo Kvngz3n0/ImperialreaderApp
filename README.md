@@ -36,7 +36,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 ### Discover and search
 
 - Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including RavenScans.org, AllPornComic, Pawchive, and Comix.to.
-- Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and supported web-novel sites.
+- Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and supported web-novel sites. Internet Archive results include readable EPUB and PDF files.
 - Search across online catalogs from **Browse** or from the library's global search. Global search preserves same-title results from separate catalogs, combines manga sources when requested, and offers optional genre/tag and artist filters.
 - Add a custom manga site by name and URL. Imperial Reader attempts to detect supported site engines when you first open it.
 - Enable or disable sources and open a source in the in-app WebView. The WebView can help with sites that require a Cloudflare challenge.
@@ -47,7 +47,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 - Save titles to your library and group them into custom categories.
 - Search, sort, and filter library entries, including by unread chapters, bookmarks, and downloaded chapters.
 - Select multiple titles to move them between categories or remove them from the library.
-- See unread, downloaded/local, and new-chapter counts, with display options in Settings.
+- See unread, downloaded/local, and new-chapter counts, with display options in Settings. The **Updates** tab badge shows the number of unread chapter updates.
 - Set a custom cover for a title from its details screen.
 - Refresh a title's chapter list or update the library for new chapters.
 

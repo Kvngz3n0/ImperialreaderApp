@@ -74,7 +74,8 @@ open class MadaraSource(
         manga.artist = doc.select(".artist-content a").joinToString(", ") { it.text() }.ifBlank { null }
         manga.description = doc.selectFirst("div.description-summary div.summary__content, div.summary_content div.post-content_item > div.summary-content, .manga-excerpt")
             ?.text()?.trim()?.ifBlank { null }
-        manga.genre = doc.select("div.genres-content a").joinToString(", ") { it.text() }.ifBlank { null }
+        manga.genre = (doc.select("div.genres-content a").map { it.text().trim() } + extractGenreTags(doc))
+            .distinct().joinToString(", ").ifBlank { manga.genre }
         manga.thumbnailUrl = imageOf(doc.selectFirst("div.summary_image img")) ?: manga.thumbnailUrl
         val statusText = doc.select("div.post-content_item").firstOrNull {
             it.selectFirst("h5, .summary-heading")?.text()?.contains("Status", true) == true

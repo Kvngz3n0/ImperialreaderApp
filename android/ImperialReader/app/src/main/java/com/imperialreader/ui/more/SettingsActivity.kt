@@ -3,7 +3,6 @@ package com.imperialreader.ui.more
 import android.app.KeyguardManager
 import android.os.Bundle
 import android.webkit.CookieManager
-import androidx.appcompat.app.AppCompatActivity
 import androidx.biometric.BiometricManager
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
@@ -13,9 +12,11 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.appbar.MaterialToolbar
 import com.imperialreader.R
 import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
+import com.imperialreader.data.update.AutomaticAppUpdateScheduler
+import com.imperialreader.data.update.LibraryUpdateScheduler
 import com.imperialreader.util.toast
 
-class SettingsActivity : AppCompatActivity() {
+class SettingsActivity : androidx.appcompat.app.AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
@@ -50,6 +51,48 @@ class SettingsActivity : AppCompatActivity() {
 
             findPreference<SwitchPreferenceCompat>("automatic_cover_refresh")?.setOnPreferenceChangeListener { _, newValue ->
                 AutomaticCoverRefreshScheduler.onSettingChanged(ctx, enabled = newValue == true)
+                true
+            }
+            val libraryUpdateFrequency = findPreference<ListPreference>("library_update_frequency")
+            libraryUpdateFrequency?.isEnabled = findPreference<SwitchPreferenceCompat>("refresh_on_start")?.isChecked == true
+            findPreference<SwitchPreferenceCompat>("refresh_on_start")?.setOnPreferenceChangeListener { _, newValue ->
+                libraryUpdateFrequency?.isEnabled = newValue == true
+                LibraryUpdateScheduler.onSettingChanged(
+                    ctx,
+                    enabled = newValue == true,
+                    intervalMinutes = libraryUpdateFrequency?.value?.toLongOrNull() ?: 0L
+                )
+                true
+            }
+            libraryUpdateFrequency?.setOnPreferenceChangeListener { _, newValue ->
+                val enabled = findPreference<SwitchPreferenceCompat>("refresh_on_start")?.isChecked == true
+                val interval = (newValue as? String)?.toLongOrNull() ?: 0L
+                LibraryUpdateScheduler.onSettingChanged(ctx, enabled, interval)
+                true
+            }
+            val automaticAppUpdateFrequency = findPreference<ListPreference>("automatic_app_update_frequency")
+            val automaticAppUpdates = findPreference<SwitchPreferenceCompat>("automatic_app_updates")
+            automaticAppUpdateFrequency?.isEnabled = automaticAppUpdates?.isChecked == true
+            automaticAppUpdates?.setOnPreferenceChangeListener { _, newValue ->
+                val enabled = newValue == true
+                automaticAppUpdateFrequency?.isEnabled = enabled
+                AutomaticAppUpdateScheduler.onSettingChanged(
+                    ctx,
+                    enabled,
+                    automaticAppUpdateFrequency?.value?.toLongOrNull() ?: 0L,
+                    checkNowForStartup = false
+                )
+                true
+            }
+            automaticAppUpdateFrequency?.setOnPreferenceChangeListener { _, newValue ->
+                val enabled = automaticAppUpdates?.isChecked == true
+                val interval = (newValue as? String)?.toLongOrNull() ?: 0L
+                AutomaticAppUpdateScheduler.onSettingChanged(
+                    ctx,
+                    enabled,
+                    interval,
+                    checkNowForStartup = false
+                )
                 true
             }
             findPreference<ListPreference>("automatic_cover_refresh_interval")?.setOnPreferenceChangeListener { _, newValue ->

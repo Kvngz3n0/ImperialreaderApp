@@ -12,8 +12,8 @@ android {
         applicationId "com.imperialreader"
         minSdk 26
         targetSdk 34
-        versionCode 12
-        versionName "V9"
+        versionCode 13
+        versionName "V11"
     }
 
     buildTypes {
@@ -62,5 +62,6 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jsoup:jsoup:1.17.2'
     implementation 'io.coil-kt:coil:2.5.0'
+    implementation 'io.coil-kt:coil-gif:2.5.0'
     implementation 'com.github.junrar:junrar:7.5.5'
 }

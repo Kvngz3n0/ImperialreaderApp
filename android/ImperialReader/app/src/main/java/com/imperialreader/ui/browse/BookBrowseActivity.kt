@@ -5,7 +5,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.view.View
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SearchView
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
@@ -25,10 +24,13 @@ import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 /** Popular + searchable grid for one EPUB / web-novel catalog. Tap a book to download it into the library. */
-class BookBrowseActivity : AppCompatActivity() {
+class BookBrowseActivity : androidx.appcompat.app.AppCompatActivity() {
 
     companion object {
         private const val EXTRA_SOURCE = "source_id"
@@ -42,12 +44,14 @@ class BookBrowseActivity : AppCompatActivity() {
     private lateinit var emptyText: TextView
 
     private var query = ""
+    private var genreSearch = false
     private var page = 1
     private var hasMore = true
     private var loading = false
     private var cloudflareUrl: String? = null
     private var retryAfterWebView = false
     private var job: Job? = null
+    private var searchDebounceJob: Job? = null
     private val items = mutableListOf<BookItem>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,17 +70,44 @@ class BookBrowseActivity : AppCompatActivity() {
         toolbar.title = source.name
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.inflateMenu(R.menu.book_menu)
+        toolbar.menu.findItem(R.id.action_webview)?.isVisible = source.webUrl != null
         val searchView = toolbar.menu.findItem(R.id.action_search).actionView as SearchView
         searchView.queryHint = "Search ${source.name}"
+        toolbar.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.action_webview -> {
+                    val url = source.webUrl ?: return@setOnMenuItemClickListener false
+                    startActivity(WebViewActivity.intent(this, url))
+                    true
+                }
+                R.id.action_genre_search -> {
+                    genreSearch = !genreSearch
+                    item.isChecked = genreSearch
+                    searchView.queryHint = if (genreSearch) "Search genres in ${source.name}" else "Search ${source.name}"
+                    reset()
+                    true
+                }
+                else -> false
+            }
+        }
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(q: String?): Boolean {
+                searchDebounceJob?.cancel()
                 query = q.orEmpty().trim()
                 searchView.clearFocus()
                 reset()
                 return true
             }
 
-            override fun onQueryTextChange(newText: String?): Boolean = true
+            override fun onQueryTextChange(newText: String?): Boolean {
+                searchDebounceJob?.cancel()
+                searchDebounceJob = lifecycleScope.launch {
+                    delay(350)
+                    query = newText.orEmpty().trim()
+                    reset()
+                }
+                return true
+            }
         })
 
         sprite = findViewById(R.id.sprite)
@@ -124,10 +155,29 @@ class BookBrowseActivity : AppCompatActivity() {
         if (page == 1) sprite.start()
         job = lifecycleScope.launch {
             try {
-                val result = if (query.isBlank()) source.popular(page) else source.search(query, page)
+                var genreError: String? = null
+                val results = if (query.isBlank()) {
+                    source.popular(page)
+                } else if (!genreSearch) {
+                    source.search(query, page)
+                } else if (query.length >= 2) {
+                    try {
+                        withTimeout(12_000L) { source.searchByGenre(query, page) }
+                    } catch (e: TimeoutCancellationException) {
+                        genreError = "Genre search timed out"
+                        emptyList()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        genreError = e.message ?: "Genre search failed"
+                        emptyList()
+                    }
+                } else {
+                    emptyList()
+                }
                 cloudflareUrl = null
-                result.forEach { b -> if (items.none { it.key == b.key }) items.add(b) }
-                hasMore = result.isNotEmpty()
+                results.forEach { b -> if (items.none { it.key == b.key }) items.add(b) }
+                hasMore = results.isNotEmpty()
                 page++
                 adapter.submitList(items.map {
                     CardItem(
@@ -142,7 +192,7 @@ class BookBrowseActivity : AppCompatActivity() {
                         tag = it
                     )
                 })
-                if (items.isEmpty()) show("Nothing found")
+                if (items.isEmpty()) show(genreError?.let { "Genre search failed: $it" } ?: "Nothing found")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

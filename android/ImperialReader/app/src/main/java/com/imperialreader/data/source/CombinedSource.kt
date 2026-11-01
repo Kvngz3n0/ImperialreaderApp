@@ -52,7 +52,11 @@ class CombinedSource : Source {
         }.getOrDefault(emptyList())
 
         /** Fetches every member's chapter list in parallel and remembers failures for actionable UI errors. */
-        suspend fun fetchAll(members: List<Member>, title: String): List<Pair<Member, List<SChapter>>> {
+        suspend fun fetchAll(
+            members: List<Member>,
+            title: String,
+            limiter: Semaphore = gate
+        ): List<Pair<Member, List<SChapter>>> {
             val outcomes = coroutineScope {
                 members.map { m ->
                     async {
@@ -60,7 +64,7 @@ class CombinedSource : Source {
                         if (source == null) {
                             Triple(m, emptyList(), "Source ${m.sourceId} is unavailable")
                         } else try {
-                            Triple(m, gate.withPermit { source.getChapters(SManga(url = m.url, title = title)) }, null)
+                            Triple(m, limiter.withPermit { source.getChapters(SManga(url = m.url, title = title)) }, null)
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {

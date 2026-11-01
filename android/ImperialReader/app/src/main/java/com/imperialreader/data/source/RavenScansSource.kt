@@ -14,9 +14,10 @@ class RavenScansSource : HttpSource() {
     private val generic = GenericSource(name, baseUrl)
 
     override fun imageHeaders(): Map<String, String> = generic.imageHeaders()
-    override suspend fun getPopular(page: Int) = generic.getPopular(page)
-    override suspend fun getLatest(page: Int) = generic.getLatest(page)
-    override suspend fun search(query: String, page: Int) = generic.search(query, page)
+
+    override suspend fun getPopular(page: Int): MangasPage = generic.getPopular(page)
+    override suspend fun getLatest(page: Int): MangasPage = generic.getLatest(page)
+    override suspend fun search(query: String, page: Int): MangasPage = generic.search(query, page)
     override suspend fun getMangaDetails(manga: SManga): SManga =
         generic.getMangaDetails(manga.copy(url = canonicalUrl(manga.url)))
 
@@ -29,7 +30,8 @@ class RavenScansSource : HttpSource() {
             val url = link.absUrl("href")
             if (runCatching { URI(url).host }.getOrNull() != siteHost) return@mapNotNull null
 
-            val name = item.selectFirst(".chapternum")?.text()?.trim()?.ifBlank { null }
+            val name = item.selectFirst(".chapternum")?.text()?.trim()
+                ?.ifBlank { null }
                 ?: link.text().trim()
             if (name.isBlank()) return@mapNotNull null
 
@@ -41,12 +43,14 @@ class RavenScansSource : HttpSource() {
             )
         }.distinctBy { it.url }
 
-        if (chapters.isEmpty()) throw IOException("RavenScans returned no readable chapters for this series")
+        if (chapters.isEmpty()) {
+            throw IOException("RavenScans returned no readable chapters for this series")
+        }
         return chapters.filter { it.chapterNumber >= 0f }.sortedByDescending { it.chapterNumber } +
             chapters.filter { it.chapterNumber < 0f }
     }
 
-    override suspend fun getPages(chapter: SChapter) =
+    override suspend fun getPages(chapter: SChapter): List<String> =
         generic.getPages(chapter.copy(url = canonicalUrl(chapter.url)))
 
     private fun canonicalUrl(url: String): String =

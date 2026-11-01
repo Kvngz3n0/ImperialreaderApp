@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
@@ -27,6 +28,7 @@
         </activity>
 
         <activity android:name=".ui.details.MangaDetailsActivity" android:exported="false"/>
+        <activity android:name=".ui.details.MigrationSourceSelectionActivity" android:exported="false"/>
         <activity android:name=".ui.browse.SourceBrowseActivity" android:exported="false"/>
         <activity android:name=".ui.browse.BookBrowseActivity" android:exported="false"/>
         <activity android:name=".ui.browse.LocalEntriesActivity" android:exported="false"/>

@@ -21,6 +21,9 @@ abstract class HttpSource : Source {
 
     override fun imageHeaders(): Map<String, String> = extraHeaders
 
+    override suspend fun searchByAuthor(query: String, page: Int): MangasPage =
+        super<Source>.searchByAuthor(query, page)
+
     protected suspend fun getString(url: String, headers: Map<String, String> = emptyMap()): String =
         execute(Request.Builder().url(url), headers)
 
@@ -45,15 +48,21 @@ abstract class HttpSource : Source {
             client.await(request).use { resp ->
                 val text = resp.body?.string().orEmpty()
                 val cfChallenge = resp.header("cf-mitigated")?.equals("challenge", ignoreCase = true) == true
+                val challengePage = Regex(
+                    "(?is)<title[^>]*>\\s*(?:just a moment|attention required|checking your browser)"
+                ).containsMatchIn(text)
+                if (cfChallenge || challengePage) {
+                    throw CloudflareException(request.url.toString())
+                }
                 if (!resp.isSuccessful) {
-                    val cf = resp.header("Server")?.contains("cloudflare", true) == true ||
-                        resp.header("cf-ray") != null
-                    if (cfChallenge || (cf && (resp.code == 403 || resp.code == 503))) {
+                    val browserCheck = resp.code == 503 &&
+                        (text.contains("browser_check", ignoreCase = true) ||
+                            text.contains("document.cookie", ignoreCase = true))
+                    if (browserCheck) {
                         throw CloudflareException(request.url.toString())
                     }
                     throw HttpStatusException(resp.code, request.url.toString())
                 }
-                if (cfChallenge) throw CloudflareException(request.url.toString())
                 text
             }
         }

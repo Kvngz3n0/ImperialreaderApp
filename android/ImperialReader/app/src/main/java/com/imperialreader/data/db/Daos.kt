@@ -166,6 +166,9 @@ interface HistoryDao {
     @Query("SELECT h.* FROM history h JOIN chapters c ON c.id = h.chapterId WHERE c.mangaId = :mangaId ORDER BY h.lastRead DESC, h.id DESC LIMIT 1")
     suspend fun latestForManga(mangaId: Long): HistoryEntity?
 
+    @Query("SELECT * FROM history WHERE chapterId = :chapterId LIMIT 1")
+    suspend fun forChapter(chapterId: Long): HistoryEntity?
+
     @Query("DELETE FROM history")
     suspend fun clear()
 }

@@ -14,8 +14,9 @@ import com.imperialreader.data.source.SManga
 import com.imperialreader.util.app
 import com.imperialreader.util.mimeForExt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -32,7 +33,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
-import kotlinx.coroutines.supervisorScope
 import okhttp3.Call
 import okhttp3.Request
 import java.io.IOException
@@ -50,24 +50,25 @@ data class DownloadQueueItem(
 )
 
 /**
- * Sequential chapter download queue (3 pages in parallel per chapter).
+ * Configurable concurrent chapter queue (3 pages in parallel per chapter).
  * Progress is exposed per chapter id (0..100), with a separate ordered snapshot for the More tab.
  * The queue lives in memory; chapters that finished are flagged `downloaded` in the database.
  */
 class DownloadManager(private val ctx: Context) {
 
     private data class Task(val manga: MangaEntity, val chapter: ChapterEntity)
-    private data class TaskOutcome(val failure: Exception? = null, val paused: Boolean = false)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val queue = ArrayDeque<Task>()
-    private var worker: Job? = null
-    private var activeTask: Task? = null
-    private var activeDownload: Deferred<Unit>? = null
-    private val activeCalls = mutableSetOf<Call>()
+    private val activeTasks = LinkedHashMap<Long, Task>()
+    private val activeJobs = LinkedHashMap<Long, Job>()
+    private val externalTasks = LinkedHashMap<String, DownloadQueueItem>()
     private val pausedMangaIds = mutableSetOf<Long>()
     private val pauseRequestedChapterIds = mutableSetOf<Long>()
-    private val externalTasks = LinkedHashMap<String, DownloadQueueItem>()
+    private val pausedChapterIds = mutableSetOf<Long>()
+    private val pauseGates = mutableMapOf<Long, CompletableDeferred<Unit>>()
+    private val cancelledChapterIds = mutableSetOf<Long>()
+    private val activeCalls = mutableMapOf<Long, MutableSet<Call>>()
 
     private val _progress = MutableStateFlow<Map<Long, Int>>(emptyMap())
     val progress: StateFlow<Map<Long, Int>> = _progress
@@ -88,12 +89,12 @@ class DownloadManager(private val ctx: Context) {
     private fun publishQueueLocked() {
         val values = _progress.value
         val items = buildList {
-            activeTask?.let { task ->
+            activeTasks.values.forEach { task ->
                 add(
                     DownloadQueueItem(
                         "chapter:${task.chapter.id}", task.manga.id, task.manga.title, task.chapter.id, task.chapter.name,
                         values[task.chapter.id] ?: 0, downloading = true,
-                        paused = task.manga.id in pausedMangaIds
+                        paused = task.chapter.id in pausedChapterIds || task.manga.id in pausedMangaIds
                     )
                 )
             }
@@ -102,7 +103,7 @@ class DownloadManager(private val ctx: Context) {
                     DownloadQueueItem(
                         "chapter:${task.chapter.id}", task.manga.id, task.manga.title, task.chapter.id, task.chapter.name,
                         values[task.chapter.id] ?: 0, downloading = false,
-                        paused = task.manga.id in pausedMangaIds
+                        paused = task.chapter.id in pausedChapterIds || task.manga.id in pausedMangaIds
                     )
                 )
             }
@@ -147,111 +148,212 @@ class DownloadManager(private val ctx: Context) {
         startWorker()
     }
 
-    @Synchronized
-    fun pauseManga(mangaId: Long) {
-        pausedMangaIds += mangaId
-        activeTask?.takeIf { it.manga.id == mangaId }?.let {
-            pauseRequestedChapterIds += it.chapter.id
-            activeDownload?.cancel()
-            activeCalls.forEach(Call::cancel)
+    fun pauseChapter(chapterId: Long) {
+        val calls = synchronized(this) {
+            if (chapterId !in activeTasks && queue.none { it.chapter.id == chapterId }) return
+            pausedChapterIds += chapterId
+            pauseGates.getOrPut(chapterId) { CompletableDeferred() }
+            publishQueueLocked()
+            activeCalls[chapterId]?.toList().orEmpty().also {
+                activeJobs[chapterId]?.cancel()
+            }
         }
-        publishQueueLocked()
+        calls.forEach(Call::cancel)
+        synchronized(this) { startWorker() }
     }
 
-    @Synchronized
+    fun resumeChapter(chapterId: Long) {
+        synchronized(this) {
+            pausedChapterIds -= chapterId
+            pauseGates.remove(chapterId)?.complete(Unit)
+            publishQueueLocked()
+            startWorker()
+        }
+    }
+
+    fun pauseManga(mangaId: Long) {
+        val calls = synchronized(this) {
+            val tasks = activeTasks.values.filter { it.manga.id == mangaId }
+            if (tasks.isEmpty() && queue.none { it.manga.id == mangaId }) return
+            pausedMangaIds += mangaId
+            tasks.forEach { task ->
+                val id = task.chapter.id
+                pauseRequestedChapterIds += id
+                pausedChapterIds += id
+                pauseGates.getOrPut(id) { CompletableDeferred() }
+                activeJobs[id]?.cancel()
+            }
+            publishQueueLocked()
+            tasks.flatMap { activeCalls[it.chapter.id]?.toList().orEmpty() }.also {
+                startWorker()
+            }
+        }
+        calls.forEach(Call::cancel)
+    }
+
     fun resumeManga(mangaId: Long) {
-        pausedMangaIds -= mangaId
-        publishQueueLocked()
-        startWorker()
+        synchronized(this) {
+            pausedMangaIds -= mangaId
+            val chapterIds = (queue.filter { it.manga.id == mangaId }.map { it.chapter.id } +
+                activeTasks.values.filter { it.manga.id == mangaId }.map { it.chapter.id })
+            chapterIds.forEach { id ->
+                pausedChapterIds -= id
+                pauseGates.remove(id)?.complete(Unit)
+            }
+            publishQueueLocked()
+            startWorker()
+        }
+    }
+
+    fun pauseAll() {
+        val calls = synchronized(this) {
+            val chapterIds = queue.map { it.chapter.id } + activeTasks.keys
+            if (chapterIds.isEmpty()) return
+            pausedChapterIds += chapterIds
+            chapterIds.forEach { id -> pauseGates.getOrPut(id) { CompletableDeferred() } }
+            publishQueueLocked()
+            chapterIds.flatMap { id ->
+                activeJobs[id]?.cancel()
+                activeCalls[id]?.toList().orEmpty()
+            }.also { startWorker() }
+        }
+        calls.forEach(Call::cancel)
+    }
+
+    fun resumeAll() {
+        synchronized(this) {
+            pausedMangaIds.clear()
+            pausedChapterIds.toList().forEach { id -> pauseGates.remove(id)?.complete(Unit) }
+            pausedChapterIds.clear()
+            publishQueueLocked()
+            startWorker()
+        }
+    }
+
+    fun cancelChapter(chapterId: Long) {
+        val calls = synchronized(this) {
+            val removedQueued = queue.removeAll { it.chapter.id == chapterId }
+            val isActive = chapterId in activeTasks
+            if (!removedQueued && !isActive) return
+            if (isActive) cancelledChapterIds += chapterId
+            else _progress.value = _progress.value - chapterId
+            pausedChapterIds -= chapterId
+            pauseGates.remove(chapterId)?.complete(Unit)
+            if (isActive) activeJobs[chapterId]?.cancel()
+            publishQueueLocked()
+            (if (isActive) activeCalls[chapterId]?.toList().orEmpty() else emptyList()).also {
+                startWorker()
+            }
+        }
+        calls.forEach(Call::cancel)
+    }
+
+    fun cancelAllForManga(mangaId: Long) {
+        val calls = synchronized(this) {
+            pausedMangaIds -= mangaId
+            val queuedIds = queue.filter { it.manga.id == mangaId }.map { it.chapter.id }
+            queue.removeAll { it.manga.id == mangaId }
+            queuedIds.forEach { id ->
+                _progress.value = _progress.value - id
+                pauseRequestedChapterIds -= id
+                pausedChapterIds -= id
+                pauseGates.remove(id)?.complete(Unit)
+            }
+            val active = activeTasks.values.filter { it.manga.id == mangaId }
+            active.forEach { task ->
+                val id = task.chapter.id
+                cancelledChapterIds += id
+                pauseRequestedChapterIds -= id
+                pausedChapterIds -= id
+                pauseGates.remove(id)?.complete(Unit)
+                activeJobs[id]?.cancel()
+            }
+            publishQueueLocked()
+            active.flatMap { activeCalls[it.chapter.id]?.toList().orEmpty() }.also {
+                startWorker()
+            }
+        }
+        calls.forEach(Call::cancel)
     }
 
     @Synchronized
     private fun startWorker() {
-        if (worker?.isActive == true) return
-        if (queue.none { it.manga.id !in pausedMangaIds }) return
-        DownloadService.start(ctx)
-        worker = scope.launch {
-            try {
-                while (true) {
-                    val task = synchronized(this@DownloadManager) {
-                        val next = queue.indexOfFirst { it.manga.id !in pausedMangaIds }
-                        (if (next >= 0) queue.removeAt(next) else null).also {
-                            activeTask = it
-                            publishQueueLocked()
-                        }
-                    } ?: break
-
-                    val outcome = runTask(task)
-                    val alreadyDownloaded =
-                        ctx.app.db.chapterDao().getById(task.chapter.id)?.downloaded == true
-                    if (!alreadyDownloaded && (outcome.paused || isMangaPaused(task.manga.id))) {
-                        ctx.app.storage.deleteDownload(task.manga, task.chapter)
-                        synchronized(this@DownloadManager) {
-                            pauseRequestedChapterIds -= task.chapter.id
-                            if (queue.none { it.chapter.id == task.chapter.id }) queue.addFirst(task)
-                            if (activeTask?.chapter?.id == task.chapter.id) activeTask = null
-                            publishQueueLocked()
-                        }
-                    } else {
-                        if (outcome.failure != null) {
-                            ctx.app.storage.deleteDownload(task.manga, task.chapter)
-                            _errors.tryEmit("Download failed: ${task.chapter.name} (${outcome.failure.message})")
-                        }
-                        synchronized(this@DownloadManager) {
-                            pauseRequestedChapterIds -= task.chapter.id
-                            _progress.value = _progress.value - task.chapter.id
-                            if (activeTask?.chapter?.id == task.chapter.id) activeTask = null
-                            publishQueueLocked()
-                        }
-                    }
-                }
-            } finally {
-                DownloadService.stop(ctx)
-                synchronized(this@DownloadManager) {
-                    worker = null
-                    activeDownload = null
-                    activeCalls.clear()
-                    activeTask = null
-                    publishQueueLocked()
-                    if (queue.any { it.manga.id !in pausedMangaIds }) startWorker()
-                }
+        while (activeTasks.values.count {
+                it.chapter.id !in pausedChapterIds && it.manga.id !in pausedMangaIds
+            } < ctx.app.prefs.downloadConcurrency
+        ) {
+            val queueIndex = queue.indexOfFirst {
+                it.chapter.id !in pausedChapterIds && it.manga.id !in pausedMangaIds
             }
+            if (queueIndex < 0) break
+            val task = queue.removeAt(queueIndex)
+            val chapterId = task.chapter.id
+            activeTasks[chapterId] = task
+            publishQueueLocked()
+            val job = scope.launch(start = CoroutineStart.LAZY) { runTask(task) }
+            activeJobs[chapterId] = job
+            job.start()
+        }
+        if (activeTasks.isNotEmpty()) {
+            DownloadService.start(ctx)
+        } else {
+            DownloadService.stop(ctx)
         }
     }
 
-    private suspend fun runTask(task: Task): TaskOutcome = supervisorScope {
-        val download = async { download(task) }
-        synchronized(this@DownloadManager) {
-            activeDownload = download
-            if (task.manga.id in pausedMangaIds) download.cancel()
-        }
+    private suspend fun runTask(task: Task) {
+        val chapterId = task.chapter.id
+        var requeue = false
         try {
-            download.await()
-            TaskOutcome()
+            awaitIfResumed(chapterId)
+            download(task)
         } catch (e: CancellationException) {
-            if (isMangaPaused(task.manga.id) || isPauseRequested(task.chapter.id)) {
-                TaskOutcome(paused = true)
-            } else throw e
+            val paused = synchronized(this) {
+                (chapterId in pausedChapterIds || task.manga.id in pausedMangaIds ||
+                    chapterId in pauseRequestedChapterIds) && chapterId !in cancelledChapterIds
+            }
+            val cancelled = synchronized(this) { chapterId in cancelledChapterIds }
+            when {
+                paused -> requeue = true
+                cancelled -> {
+                    ctx.app.storage.deleteDownload(task.manga, task.chapter)
+                }
+                else -> throw e
+            }
         } catch (e: Exception) {
-            if (isMangaPaused(task.manga.id) || isPauseRequested(task.chapter.id)) {
-                TaskOutcome(paused = true)
-            } else TaskOutcome(failure = e)
+            val paused = synchronized(this) {
+                (chapterId in pausedChapterIds || task.manga.id in pausedMangaIds ||
+                    chapterId in pauseRequestedChapterIds) && chapterId !in cancelledChapterIds
+            }
+            if (paused) {
+                requeue = true
+            } else {
+                ctx.app.storage.deleteDownload(task.manga, task.chapter)
+                _errors.tryEmit("Download failed: ${task.chapter.name} (${e.message})")
+            }
         } finally {
-            synchronized(this@DownloadManager) {
-                if (activeDownload === download) activeDownload = null
-                activeCalls.clear()
+            synchronized(this) {
+                activeTasks.remove(chapterId)
+                activeJobs.remove(chapterId)
+                val userCancelled = chapterId in cancelledChapterIds
+                cancelledChapterIds -= chapterId
+                if (requeue && !userCancelled) {
+                    if (queue.none { it.chapter.id == chapterId }) queue.addFirst(task)
+                } else {
+                    _progress.value = _progress.value - chapterId
+                    pausedChapterIds -= chapterId
+                    pauseGates.remove(chapterId)?.complete(Unit)
+                }
+                pauseRequestedChapterIds -= chapterId
+                publishQueueLocked()
+                startWorker()
             }
         }
     }
-
-    @Synchronized
-    private fun isMangaPaused(mangaId: Long): Boolean = mangaId in pausedMangaIds
-
-    @Synchronized
-    private fun isPauseRequested(chapterId: Long): Boolean = chapterId in pauseRequestedChapterIds
 
     private suspend fun download(task: Task) {
         val app = ctx.app
+        awaitIfResumed(task.chapter.id)
         if (BookSources.get(task.manga.source)?.isWebNovel == true) {
             NovelChapterEpub.download(ctx, task.manga, task.chapter)
             app.db.chapterDao().setDownloaded(task.chapter.id, true)
@@ -273,11 +375,10 @@ class DownloadManager(private val ctx: Context) {
         coroutineScope {
             pages.mapIndexed { index, url ->
                 async {
-                    currentCoroutineContext().ensureActive()
+                    awaitIfResumed(task.chapter.id)
                     sem.withPermit {
-                        currentCoroutineContext().ensureActive()
-                        downloadPage(loaded.headers, url, index, dir, task.manga.id, task.chapter.id)
-                        currentCoroutineContext().ensureActive()
+                        awaitIfResumed(task.chapter.id)
+                        downloadPage(task.chapter.id, loaded.headers, url, index, dir)
                         setProgress(task.chapter.id, done.incrementAndGet() * 100 / pages.size)
                     }
                 }
@@ -287,75 +388,88 @@ class DownloadManager(private val ctx: Context) {
     }
 
     private suspend fun downloadPage(
+        chapterId: Long,
         headers: Map<String, String>,
         url: String,
         index: Int,
-        dir: DocumentFile,
-        mangaId: Long,
-        chapterId: Long
+        dir: DocumentFile
     ) {
         var lastError: Exception? = null
         for (attempt in 0 until 3) {
-            currentCoroutineContext().ensureActive()
+            awaitIfResumed(chapterId)
             var created: DocumentFile? = null
+            var call: Call? = null
             try {
                 val request = Request.Builder().url(url).apply {
                     headers.forEach { (k, v) -> header(k, v) }
                 }.build()
-                val pageCall = ctx.app.network.client.newCall(request)
-                synchronized(this) {
-                    if (mangaId in pausedMangaIds) pageCall.cancel() else activeCalls += pageCall
-                }
-                try {
-                    pageCall.execute().use { resp ->
-                        if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-                        val ct = resp.header("Content-Type").orEmpty()
-                        val scrambleOffset = MangaFirePageTransform.offset(url)
-                        val ext = if (scrambleOffset != null) "jpg" else when {
-                            "png" in ct -> "png"
-                            "webp" in ct -> "webp"
-                            "gif" in ct -> "gif"
-                            "avif" in ct -> "avif"
-                            else -> "jpg"
-                        }
-                        val file = dir.createFile(mimeForExt(ext), "%03d.%s".format(index + 1, ext))
-                            ?: throw IOException("Cannot create file")
-                        created = file
-                        val out = ctx.contentResolver.openOutputStream(file.uri, "w")
-                            ?: throw IOException("Cannot open file for writing")
-                        out.use {
-                            if (scrambleOffset == null) {
-                                resp.body!!.byteStream().copyTo(it)
-                            } else {
-                                val bytes = resp.body!!.bytes()
-                                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                    ?: throw IOException("Could not decode a MangaFire page image")
-                                val transformed = MangaFirePageTransform.unscramble(bitmap, scrambleOffset)
-                                if (!transformed.compress(Bitmap.CompressFormat.JPEG, 95, it)) {
-                                    throw IOException("Could not save the decoded MangaFire page image")
-                                }
-                                if (transformed !== bitmap) transformed.recycle()
-                                bitmap.recycle()
+                call = ctx.app.network.client.newCall(request)
+                synchronized(this) { activeCalls.getOrPut(chapterId) { mutableSetOf() }.add(call) }
+                call.execute().use { resp ->
+                    if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
+                    val ct = resp.header("Content-Type").orEmpty()
+                    val scrambleOffset = MangaFirePageTransform.offset(url)
+                    val ext = if (scrambleOffset != null) "jpg" else when {
+                        "png" in ct -> "png"
+                        "webp" in ct -> "webp"
+                        "gif" in ct -> "gif"
+                        "avif" in ct -> "avif"
+                        else -> "jpg"
+                    }
+                    val file = dir.createFile(mimeForExt(ext), "%03d.%s".format(index + 1, ext))
+                        ?: throw IOException("Cannot create file")
+                    created = file
+                    val out = ctx.contentResolver.openOutputStream(file.uri, "w")
+                        ?: throw IOException("Cannot open file for writing")
+                    out.use {
+                        if (scrambleOffset == null) {
+                            resp.body!!.byteStream().copyTo(it)
+                        } else {
+                            val bytes = resp.body!!.bytes()
+                            val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                ?: throw IOException("Could not decode a MangaFire page image")
+                            val transformed = MangaFirePageTransform.unscramble(bitmap, scrambleOffset)
+                            if (!transformed.compress(Bitmap.CompressFormat.JPEG, 95, it)) {
+                                throw IOException("Could not save the decoded MangaFire page image")
                             }
+                            if (transformed !== bitmap) transformed.recycle()
+                            bitmap.recycle()
                         }
                     }
-                } finally {
-                    synchronized(this) { activeCalls -= pageCall }
                 }
                 return
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (isMangaPaused(mangaId) || isPauseRequested(chapterId)) {
-                    throw CancellationException("Download paused")
-                }
+                if (isCancelled(chapterId)) throw CancellationException("Download canceled")
                 lastError = e
                 created?.delete()
                 delay(1000L * (attempt + 1))
+            } finally {
+                call?.let { finished ->
+                    synchronized(this) {
+                        activeCalls[chapterId]?.let { calls ->
+                            calls.remove(finished)
+                            if (calls.isEmpty()) activeCalls.remove(chapterId)
+                        }
+                    }
+                }
             }
         }
         throw lastError ?: IOException("Download failed")
     }
+
+    private suspend fun awaitIfResumed(chapterId: Long) {
+        while (true) {
+            val gate = synchronized(this) { pauseGates[chapterId] } ?: break
+            gate.await()
+        }
+        if (isCancelled(chapterId)) throw CancellationException("Download canceled")
+        currentCoroutineContext().ensureActive()
+    }
+
+    private fun isCancelled(chapterId: Long): Boolean =
+        synchronized(this) { chapterId in cancelledChapterIds }
 
     suspend fun deleteDownload(manga: MangaEntity, chapter: ChapterEntity) {
         val dir = ctx.app.storage.chapterDir(manga, chapter, create = false)

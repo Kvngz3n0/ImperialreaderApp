@@ -1,8 +1,11 @@
 package com.imperialreader
 
 import android.app.Application
+import android.os.Build
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import coil.decode.GifDecoder
+import coil.decode.ImageDecoderDecoder
 import com.imperialreader.data.AppPrefs
 import com.imperialreader.data.backup.AutomaticBackupScheduler
 import com.imperialreader.data.db.AppDatabase
@@ -40,6 +43,20 @@ class App : Application(), ImageLoaderFactory {
             .okHttpClient(network.client)
             .crossfade(true)
             .build()
+
+    val witchToonsCoverImageLoader by lazy {
+        ImageLoader.Builder(this)
+            .okHttpClient(network.client)
+            .components {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    add(ImageDecoderDecoder.Factory())
+                } else {
+                    add(GifDecoder.Factory())
+                }
+            }
+            .crossfade(true)
+            .build()
+    }
 
     companion object {
         lateinit var instance: App

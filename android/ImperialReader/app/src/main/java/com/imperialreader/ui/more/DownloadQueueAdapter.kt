@@ -34,6 +34,7 @@ internal sealed interface QueueRow {
 
 internal class DownloadQueueAdapter(
     private val onClick: (DownloadQueueItem) -> Unit,
+    private val onActions: (DownloadQueueItem) -> Unit,
     private val onPauseAllForEntry: (mangaId: Long, allPaused: Boolean) -> Unit
 ) : ListAdapter<QueueRow, DownloadQueueAdapter.VH>(Diff) {
 
@@ -95,7 +96,7 @@ internal class DownloadQueueAdapter(
         holder.progress.visibility = View.GONE
         holder.actions.visibility = View.VISIBLE
         holder.actions.setOnClickListener {
-            showEntryActions(holder.actions, group.mangaId, group.items.all { it.paused })
+            showGroupActions(holder.actions, group.mangaId, group.items.all { it.paused })
         }
         holder.itemView.setPadding(
             holder.itemView.context.dp(16),
@@ -108,7 +109,7 @@ internal class DownloadQueueAdapter(
             submitQueue(queueItems)
         }
         holder.itemView.setOnLongClickListener {
-            showEntryActions(holder.itemView, group.mangaId, group.items.all { it.paused })
+            showGroupActions(holder.itemView, group.mangaId, group.items.all { it.paused })
             true
         }
     }
@@ -120,7 +121,7 @@ internal class DownloadQueueAdapter(
             append(item.chapterName)
             append(" • ")
             when {
-                item.paused -> append("Paused")
+                item.paused -> append(if (item.downloading) "Paused · ${item.progress}%" else "Paused · Queued")
                 item.downloading -> append(if (item.progress > 0) "Downloading · ${item.progress}%" else "Starting download…")
                 else -> append("Queued")
             }
@@ -133,14 +134,16 @@ internal class DownloadQueueAdapter(
         holder.progress.visibility = if (item.downloading && !item.paused) View.VISIBLE else View.GONE
         holder.progress.isIndeterminate = item.downloading && item.progress == 0
         if (item.progress > 0) holder.progress.progress = item.progress
-        holder.actions.visibility = if (item.mangaId != null) View.VISIBLE else View.GONE
+        holder.actions.visibility = if (item.chapterId != null) View.VISIBLE else View.GONE
         holder.actions.setOnClickListener {
-            item.mangaId?.let { id -> showEntryActions(holder.actions, id, item.paused) }
+            if (item.chapterId != null) onActions(item)
         }
         holder.itemView.setOnClickListener { if (item.mangaId != null) onClick(item) }
         holder.itemView.setOnLongClickListener {
-            item.mangaId?.let { id -> showEntryActions(holder.itemView, id, item.paused) }
-            item.mangaId != null
+            if (item.chapterId == null) false else {
+                onActions(item)
+                true
+            }
         }
         holder.itemView.setPadding(
             holder.itemView.context.dp(16) + if (row.nested) holder.itemView.context.dp(20) else 0,
@@ -150,7 +153,7 @@ internal class DownloadQueueAdapter(
         )
     }
 
-    private fun showEntryActions(anchor: View, mangaId: Long, allPaused: Boolean) {
+    private fun showGroupActions(anchor: View, mangaId: Long, allPaused: Boolean) {
         PopupMenu(anchor.context, anchor).apply {
             menu.add(if (allPaused) "Resume all for this entry" else "Pause all for this entry")
             setOnMenuItemClickListener {
