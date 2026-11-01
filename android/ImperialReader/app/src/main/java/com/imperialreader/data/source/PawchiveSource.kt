@@ -8,6 +8,8 @@ import java.io.IOException
 import java.net.URI
 
 class PawchiveSource : HttpSource() {
+    private data class MediaFile(val path: String, val node: Int)
+
     override val id = "pawchive_pw"
     override val name = "Pawchive"
     override val lang = "en"
@@ -26,7 +28,7 @@ class PawchiveSource : HttpSource() {
             val post = json.optJSONObject(index) ?: return@mapNotNull null
             val route = postRoute(post) ?: return@mapNotNull null
             val title = post.optString("title").trim()
-            val cover = mediaPaths(post).firstOrNull()
+            val cover = mediaFiles(post).firstOrNull()
             if (title.isBlank() || cover == null) return@mapNotNull null
             SManga(url = route, title = title, thumbnailUrl = mediaUrl(cover))
         }
@@ -35,7 +37,7 @@ class PawchiveSource : HttpSource() {
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
         val post = loadPost(manga.url)
-        val images = mediaPaths(post)
+        val images = mediaFiles(post)
         return manga.copy(
             title = post.optString("title").trim().ifBlank { manga.title },
             thumbnailUrl = images.firstOrNull()?.let(::mediaUrl) ?: manga.thumbnailUrl,
@@ -52,7 +54,7 @@ class PawchiveSource : HttpSource() {
 
     override suspend fun getPages(chapter: SChapter): List<String> {
         val post = loadPost(chapter.url)
-        val pages = mediaPaths(post).map(::mediaUrl).distinct()
+        val pages = mediaFiles(post).map(::mediaUrl).distinct()
         if (pages.isEmpty()) throw IOException("Pawchive returned no readable images for this post")
         return pages
     }
@@ -84,28 +86,26 @@ class PawchiveSource : HttpSource() {
         return parts.drop(1)
     }
 
-    private fun mediaPaths(post: JSONObject): List<String> = buildList<String> {
-        addImagePath(post.optJSONObject("file"))?.let { add(it) }
+    private fun mediaFiles(post: JSONObject): List<MediaFile> = buildList {
+        addImageFile(post.optJSONObject("file"))?.let { add(it) }
         val attachments = post.optJSONArray("attachments") ?: JSONArray()
         for (index in 0 until attachments.length()) {
-            addImagePath(attachments.optJSONObject(index))?.let { add(it) }
+            addImageFile(attachments.optJSONObject(index))?.let { add(it) }
         }
-    }.distinct()
+    }.distinctBy { it.node to it.path }
 
-    private fun addImagePath(file: JSONObject?): String? {
+    private fun addImageFile(file: JSONObject?): MediaFile? {
         val path = file?.optString("path")?.takeIf { it.isNotBlank() } ?: return null
         val uri = runCatching { URI(path) }.getOrNull()
         if (uri?.isAbsolute == true && !uri.host.equals(URI(baseUrl).host, ignoreCase = true)) return null
-        val pathOnly = uri?.path ?: path
+        val pathOnly = (uri?.path ?: path).removePrefix("/data/")
         if (pathOnly.substringAfterLast('.', "").lowercase() !in IMAGE_EXTENSIONS) return null
-        return pathOnly
+        val node = file.optInt("node", 0).takeIf { it > 0 } ?: return null
+        return MediaFile(pathOnly, node)
     }
 
-    private fun mediaUrl(path: String): String = when {
-        path.startsWith("https://pawchive.pw/", ignoreCase = true) -> path
-        path.startsWith("/data/") -> baseUrl + path
-        else -> "$baseUrl/data/${path.trimStart('/')}"
-    }
+    private fun mediaUrl(file: MediaFile): String =
+        "https://n${file.node}.pawchive.pw/data/${file.path.trimStart('/')}"
 
     private companion object {
         const val PAGE_SIZE = 50
