@@ -897,10 +897,10 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             h.genres.text = manga.genre.orEmpty()
             h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
             h.chapters.text = "$count chapters"
-            h.title.setTextColor(Color.WHITE)
+            h.title.setTextColor(getColor(R.color.on_surface))
             h.author.setTextColor(getColor(R.color.on_surface_variant))
             h.status.setTextColor(getColor(R.color.on_surface_variant))
-            h.desc.setTextColor(Color.WHITE)
+            h.desc.setTextColor(getColor(R.color.on_surface))
             h.genres.setTextColor(getColor(R.color.gold_light))
             h.chapters.setTextColor(getColor(R.color.on_surface))
             h.btnLibrary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.gold))
@@ -1000,7 +1000,7 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             val c = row.chapter
             h.title.text = (if (c.bookmark) "★ " else "") + c.name
             h.title.alpha = if (c.read) 0.5f else 1f
-            h.title.setTextColor(Color.WHITE)
+            h.title.setTextColor(getColor(R.color.on_surface))
             h.selectionMark.visibility = if (row.selected) View.VISIBLE else View.GONE
             h.sub.text = listOfNotNull(
                 relativeTime(c.dateUpload).takeIf { it.isNotBlank() },

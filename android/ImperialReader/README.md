@@ -1,7 +1,7 @@
 # Imperial Reader
 
 A Mihon/Tachiyomi-style manga reader for Android (Kotlin, Views + Material 3, Room, OkHttp, Jsoup, Coil).
-Black-and-gold "Imperial" theme, Mihon layout: **Library · Updates · History · Browse · More**.
+Muted charcoal-and-gold "Imperial" theme, Mihon layout: **Library · Updates · History · Browse · More**.
 
 ## Features
 
@@ -18,7 +18,7 @@ Black-and-gold "Imperial" theme, Mihon layout: **Library · Updates · History �
 | EPUB / web novels | Light-novel reading controls, section seek/progress, contents list, font size, dark/sepia/light themes, and text-to-speech |
 | PDF | Local PDFs open in a paged reader with page seeking, previous/next controls, and persisted page progress |
 | Downloads | Foreground-service queue, 3 parallel pages, stored in `downloads/<Source (LANG)>/<Manga>/<Chapter>/001.jpg` (MP4 media is saved as `.mp4`) |
-| Appearance | Material 3 theme with Material You dynamic colors on supported Android versions. |
+| Appearance | Consistent Material 3 theme with muted charcoal surfaces and softened gold accents. |
 | Cloudflare | In-app WebView shares cookies with the HTTP client: solve the challenge once, then retry |
 
 ## Build it on GitHub (no PC tooling needed)

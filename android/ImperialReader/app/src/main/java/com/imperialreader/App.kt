@@ -7,7 +7,6 @@ import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
 import coil.decode.ImageDecoderDecoder
-import com.google.android.material.color.DynamicColors
 import com.imperialreader.data.AppPrefs
 import com.imperialreader.data.backup.AutomaticBackupScheduler
 import com.imperialreader.data.db.AppDatabase
@@ -42,7 +41,6 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
-        DynamicColors.applyToActivitiesIfAvailable(this)
         registerActivityLifecycleCallbacks(appLockManager)
         applicationScope.launch {
             try {
