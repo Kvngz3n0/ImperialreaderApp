@@ -847,6 +847,8 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
 
         inner class VH(v: View) : RecyclerView.ViewHolder(v) {
             val cover: ImageView = v.findViewById(R.id.hCover)
+            var boundCoverUrl: String? = null
+            var hasBoundCover = false
             val title: TextView = v.findViewById(R.id.hTitle)
             val author: TextView = v.findViewById(R.id.hAuthor)
             val status: TextView = v.findViewById(R.id.hStatus)
@@ -865,7 +867,12 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         override fun onBindViewHolder(h: VH, position: Int) {
             val manga = m ?: return
             val source = app.sources.get(manga.source)
-            h.cover.loadCover(manga.displayCoverUrl, source?.imageHeaders().orEmpty())
+            val coverUrl = manga.displayCoverUrl
+            if (!h.hasBoundCover || h.boundCoverUrl != coverUrl) {
+                h.cover.loadCover(coverUrl, source?.imageHeaders().orEmpty())
+                h.boundCoverUrl = coverUrl
+                h.hasBoundCover = true
+            }
             h.cover.setOnClickListener {
                 manga.displayCoverUrl?.let { url -> showCoverViewer(url, source?.imageHeaders().orEmpty()) }
             }
