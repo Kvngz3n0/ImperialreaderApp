@@ -58,10 +58,12 @@ object LocalArtworkPreview {
     private fun extractClipZipPreview(file: File, target: File): Boolean {
         return try {
             ZipFile(file).use { zip ->
-                val candidates = zip.entries().asSequence()
-                    .filter { !it.isDirectory && it.name.substringAfterLast('/').lowercase() in PREVIEW_NAMES }
-                    .sortedBy { if (it.name.substringAfterLast('/').equals("mergedimage.png", true)) 0 else 1 }
+                val imageEntries = zip.entries().asSequence()
+                    .filter { !it.isDirectory && isClipImageEntry(it.name) }
                     .toList()
+                val previews = imageEntries.filter { isClipPreviewEntry(it.name) }
+                    .sortedBy { clipPreviewPriority(it.name) }
+                val candidates = previews.ifEmpty { imageEntries.sortedByDescending { it.size } }
                 for (entry in candidates) {
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     zip.getInputStream(entry).use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -79,6 +81,21 @@ object LocalArtworkPreview {
         } catch (_: ZipException) {
             false
         }
+    }
+
+    private fun isClipPreviewEntry(path: String): Boolean {
+        val name = path.substringAfterLast('/').lowercase()
+        return isClipImageEntry(path) && PREVIEW_MARKERS.any(name::contains)
+    }
+
+    private fun isClipImageEntry(path: String): Boolean {
+        val extension = path.substringAfterLast('/').substringAfterLast('.', "").lowercase()
+        return extension in PREVIEW_EXTENSIONS
+    }
+
+    private fun clipPreviewPriority(path: String): Int {
+        val name = path.substringAfterLast('/').lowercase()
+        return PREVIEW_MARKERS.indexOfFirst(name::contains).takeIf { it >= 0 } ?: PREVIEW_MARKERS.size
     }
 
     private fun extractPsdThumbnail(file: File, target: File): Boolean {
@@ -248,5 +265,6 @@ object LocalArtworkPreview {
     private const val MAX_THUMBNAIL_BYTES = 64L * 1024L * 1024L
     private const val JPEG_THUMBNAIL_FORMAT = 1L
     private val THUMBNAIL_RESOURCE_IDS = setOf(1033, 1036)
-    private val PREVIEW_NAMES = setOf("mergedimage.png", "thumbnail.png")
+    private val PREVIEW_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
+    private val PREVIEW_MARKERS = listOf("mergedimage", "merged_image", "preview", "thumbnail", "canvas")
 }

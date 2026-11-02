@@ -16,6 +16,7 @@ import com.imperialreader.data.update.AutomaticAppUpdateScheduler
 import com.imperialreader.data.update.LibraryUpdateScheduler
 import com.imperialreader.data.update.LibraryRefreshNotification
 import com.imperialreader.util.app
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 import androidx.fragment.app.Fragment
@@ -52,9 +53,16 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
         }
         if (savedInstanceState == null) {
             nav.selectedItemId = R.id.nav_library
-            AutomaticCoverRefreshScheduler.onAppStart(this)
-            LibraryUpdateScheduler.onAppStart(this)
-            AutomaticAppUpdateScheduler.onAppStart(this)
+            lifecycleScope.launch(Dispatchers.IO) {
+                try {
+                    val context = applicationContext
+                    AutomaticCoverRefreshScheduler.onAppStart(context)
+                    LibraryUpdateScheduler.onAppStart(context)
+                    AutomaticAppUpdateScheduler.onAppStart(context)
+                } catch (e: Exception) {
+                    Log.e("MainActivity", "Could not schedule background tasks", e)
+                }
+            }
         }
 
         lifecycleScope.launch {

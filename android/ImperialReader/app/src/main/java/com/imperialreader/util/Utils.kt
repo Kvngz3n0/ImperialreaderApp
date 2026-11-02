@@ -22,6 +22,9 @@ fun isImageName(name: String?): Boolean {
     return ext in IMAGE_EXTENSIONS
 }
 
+fun isReaderPageName(name: String?): Boolean =
+    isImageName(name) || name?.substringAfterLast('.', "")?.equals("mp4", ignoreCase = true) == true
+
 fun mimeForExt(ext: String): String = when (ext.lowercase()) {
     "jpg", "jpeg" -> "image/jpeg"
     "png" -> "image/png"
@@ -30,6 +33,7 @@ fun mimeForExt(ext: String): String = when (ext.lowercase()) {
     "avif" -> "image/avif"
     "epub" -> "application/epub+zip"
     "bmp" -> "image/bmp"
+    "mp4" -> "video/mp4"
     else -> "application/octet-stream"
 }
 

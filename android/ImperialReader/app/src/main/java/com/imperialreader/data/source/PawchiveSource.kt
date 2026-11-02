@@ -173,7 +173,7 @@ class PawchiveSource : HttpSource() {
         val (service, userId, postId) = parsePostRoute(chapter.url)
         val post = loadPost(service, userId, postId)
         val pages = mediaFiles(post).map(::mediaUrl).distinct()
-        if (pages.isEmpty()) throw IOException("Pawchive returned no readable images for this post")
+        if (pages.isEmpty()) throw IOException("Pawchive returned no readable media for this post")
         return pages
     }
 
@@ -236,7 +236,7 @@ class PawchiveSource : HttpSource() {
     private fun addMediaFile(file: JSONObject?): MediaFile? {
         val path = file?.optString("path")?.takeIf { it.isNotBlank() } ?: return null
         val normalized = path.removePrefix("/data/").trimStart('/')
-        if (normalized.substringAfterLast('.', "").lowercase() !in IMAGE_EXTENSIONS) return null
+        if (normalized.substringAfterLast('.', "").lowercase() !in MEDIA_EXTENSIONS) return null
         return MediaFile(normalized)
     }
 
@@ -257,6 +257,6 @@ class PawchiveSource : HttpSource() {
     private companion object {
         const val PAGE_SIZE = 50
         const val MAX_CHAPTERS = 1000
-        val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "avif")
+        val MEDIA_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "gif", "avif", "mp4")
     }
 }

@@ -53,7 +53,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Read, track, and download
 
-- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts. Animated GIF pages and covers are supported.
+- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts. Animated GIF pages and Pawchive MP4 posts are supported.
 - Resume reading progress, move between chapters, and optionally use screen-edge taps or volume keys for page navigation.
 - Bookmark chapters, mark chapters read or unread, and see reading history. Incognito mode disables reading-history entries.
 - Queue chapter downloads, follow the queue in **More**, and read downloaded chapters offline. Large multi-chapter downloads are grouped by title and can be paused or resumed together.
@@ -62,10 +62,10 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Local files and backups
 
-- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, and CLIP files as library titles. PSD and CLIP reading depends on an embedded flattened preview.
+- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, and CLIP files as library titles. PSD and CLIP reading uses embedded flattened previews when available.
 - Read local titles from the library and refresh the scan when files change.
 - Choose where downloads and local files are stored; without a selected folder, the app uses private app storage.
-- Add a profile picture from **More**.
+- Add a round profile picture from **More**. Pictures are copied into app storage; tapping the avatar asks before opening the image picker.
 - Export or restore a JSON backup containing library titles, categories, chapter read/bookmark/progress state, and history. Restore merges with the current library rather than deleting it.
 - Create automatic backups manually or let the app run them periodically; it keeps a rolling set of the five most recent automatic backups.
 

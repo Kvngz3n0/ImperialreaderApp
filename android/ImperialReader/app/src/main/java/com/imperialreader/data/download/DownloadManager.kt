@@ -409,7 +409,10 @@ class DownloadManager(private val ctx: Context) {
                     if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
                     val ct = resp.header("Content-Type").orEmpty()
                     val scrambleOffset = MangaFirePageTransform.offset(url)
+                    val urlExtension = url.substringBefore('?').substringAfterLast('.', "").lowercase()
                     val ext = if (scrambleOffset != null) "jpg" else when {
+                        ct.substringBefore(';').trim().equals("video/mp4", ignoreCase = true) ||
+                            urlExtension == "mp4" -> "mp4"
                         "png" in ct -> "png"
                         "webp" in ct -> "webp"
                         "gif" in ct -> "gif"

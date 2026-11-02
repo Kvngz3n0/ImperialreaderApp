@@ -4,14 +4,17 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.RectF
+import android.net.Uri
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
+import android.widget.MediaController
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.VideoView
 import androidx.recyclerview.widget.RecyclerView
 import androidx.appcompat.widget.AppCompatImageView
 import coil.load
@@ -205,6 +208,8 @@ class PageAdapter(
     class VH(
         val root: FrameLayout,
         val image: ZoomablePageImageView,
+        val video: VideoView,
+        val mediaController: MediaController,
         val progress: ProgressBar,
         val error: TextView
     ) : RecyclerView.ViewHolder(root)
@@ -224,6 +229,12 @@ class PageAdapter(
             layoutParams = FrameLayout.LayoutParams(match, if (webtoon) wrap else match)
             if (webtoon) adjustViewBounds = true
         }
+        val video = VideoView(ctx).apply {
+            layoutParams = FrameLayout.LayoutParams(match, if (webtoon) ctx.dp(320) else match)
+            visibility = View.GONE
+        }
+        val mediaController = MediaController(ctx).apply { setAnchorView(root) }
+        video.setMediaController(mediaController)
         val progress = ProgressBar(ctx).apply {
             isIndeterminate = true
             layoutParams = FrameLayout.LayoutParams(ctx.dp(36), ctx.dp(36), android.view.Gravity.CENTER)
@@ -236,9 +247,10 @@ class PageAdapter(
             visibility = View.GONE
         }
         root.addView(image)
+        root.addView(video)
         root.addView(progress)
         root.addView(error)
-        return VH(root, image, progress, error)
+        return VH(root, image, video, mediaController, progress, error)
     }
 
     override fun onBindViewHolder(h: VH, position: Int) {
@@ -251,12 +263,43 @@ class PageAdapter(
         boundImages.entries.removeAll { it.value === h.image }
         boundImages[position] = h.image
         h.image.onZoomChanged = { zoomed -> onZoomChanged(position, zoomed) }
+        h.error.visibility = View.GONE
+        h.progress.visibility = View.VISIBLE
+        if (isVideoPage(h.root.context, url)) {
+            h.video.stopPlayback()
+            h.image.visibility = View.GONE
+            h.image.setImageDrawable(null)
+            h.image.setOnLongClickListener(null)
+            h.video.visibility = View.VISIBLE
+            h.video.setOnPreparedListener { player ->
+                if (h.bindingAdapterPosition != position) return@setOnPreparedListener
+                h.progress.visibility = View.GONE
+                h.root.minimumHeight = 0
+                player.isLooping = true
+                h.mediaController.show(0)
+            }
+            h.video.setOnErrorListener { _, _, _ ->
+                if (h.bindingAdapterPosition == position) {
+                    h.progress.visibility = View.GONE
+                    h.error.text = "Video failed to load\nTap to retry"
+                    h.error.visibility = View.VISIBLE
+                    h.error.setOnClickListener { load(h, position) }
+                }
+                true
+            }
+            h.video.setVideoURI(Uri.parse(url))
+            return
+        }
+        h.video.stopPlayback()
+        h.video.setOnPreparedListener(null)
+        h.video.setOnErrorListener(null)
+        h.mediaController.hide()
+        h.video.visibility = View.GONE
+        h.image.visibility = View.VISIBLE
         h.image.setOnLongClickListener {
             onSavePage(h.image, url)
             true
         }
-        h.error.visibility = View.GONE
-        h.progress.visibility = View.VISIBLE
         h.image.load(url) {
             headers.forEach { (k, v) -> addHeader(k, v) }
             MangaFirePageTransform.offset(url)?.let { transformations(MangaFireImageTransformation(it)) }
@@ -283,11 +326,25 @@ class PageAdapter(
             MangaFirePageTransform.unscramble(input, offset)
     }
 
+    private fun isVideoPage(context: Context, url: String): Boolean {
+        val uri = Uri.parse(url)
+        val name = uri.lastPathSegment.orEmpty().substringBefore('?')
+        if (name.endsWith(".mp4", ignoreCase = true)) return true
+        return uri.scheme == "content" &&
+            context.contentResolver.getType(uri)?.substringBefore(';')
+                ?.equals("video/mp4", ignoreCase = true) == true
+    }
+
     override fun onViewRecycled(holder: VH) {
         boundImages.entries.removeAll { it.value === holder.image }
         holder.image.resetZoom()
         holder.image.onZoomChanged = null
         holder.image.setImageDrawable(null)
+        holder.video.stopPlayback()
+        holder.video.setOnPreparedListener(null)
+        holder.video.setOnErrorListener(null)
+        holder.mediaController.hide()
+        holder.video.visibility = View.GONE
         if (webtoon) holder.root.minimumHeight = holder.root.context.dp(320)
         super.onViewRecycled(holder)
     }

@@ -13,11 +13,12 @@ Black-and-gold "Imperial" theme, Mihon layout: **Library · Updates · History �
 | Browse | **Sources** (Popular / Latest / Search, infinite scroll, add any site by URL) and **Extensions** = Local library manager plus EPUB / web-novel catalogs (Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and dozens of QuickNovel-style novel sites) |
 | Built-in sources | MangaDex (official API) + a list of Madara-theme sites (see "Sources" below) |
 | Details | Cover/info header, add to library, chapter list with read / bookmark / download state, Start / Resume / Read again |
-| Reader | Left-to-right, right-to-left, vertical webtoon, tap zones, seek bar, prev/next chapter, volume keys, progress + history saving, fullscreen, keep-screen-on |
-| Local library | Import a manga folder from **Browse → Extensions → Local**, or use **More → Scan local library**. Reads image folders, CBZ, ZIP, CBR/RAR, PDF, and EPUB chapters. Refresh detects added, renamed, and removed chapter files in the configured `local/` folder. |
+| Reader | Left-to-right, right-to-left, vertical webtoon, tap zones, seek bar, prev/next chapter, volume keys, progress + history saving, fullscreen, keep-screen-on, GIF pages, and MP4 playback |
+| Local library | Import a manga folder from **Browse → Extensions → Local**, or use **More → Scan local library**. Reads image folders, CBZ, ZIP, CBR/RAR, PDF, EPUB, PSD, and CLIP chapters; PSD/CLIP use embedded previews. Refresh detects added, renamed, and removed chapter files in the configured `local/` folder. |
 | EPUB / web novels | Light-novel reading controls, section seek/progress, contents list, font size, dark/sepia/light themes, and text-to-speech |
 | PDF | Local PDFs open in a paged reader with page seeking, previous/next controls, and persisted page progress |
-| Downloads | Foreground-service queue, 3 parallel pages, stored in `downloads/<Source (LANG)>/<Manga>/<Chapter>/001.jpg` |
+| Downloads | Foreground-service queue, 3 parallel pages, stored in `downloads/<Source (LANG)>/<Manga>/<Chapter>/001.jpg` (MP4 media is saved as `.mp4`) |
+| Appearance | Material 3 theme with Material You dynamic colors on supported Android versions; More includes a centered round profile photo that is retained in app storage. |
 | Cloudflare | In-app WebView shares cookies with the HTTP client: solve the challenge once, then retry |
 
 ## Build it on GitHub (no PC tooling needed)
