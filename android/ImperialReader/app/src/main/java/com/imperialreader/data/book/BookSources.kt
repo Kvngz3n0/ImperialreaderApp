@@ -1007,7 +1007,14 @@ object BookSources {
     )
 
     val all: List<BookSource> =
-        listOf(LocalBookSource(), GutenbergSource(), InternetArchiveSource(), RoyalRoadSource(), TapasNovelSource()) +
+        listOf(
+            LocalBookSource(),
+            GutenbergSource(),
+            InternetArchiveSource(),
+            RoyalRoadSource(),
+            TapasNovelSource(),
+            RoliaScanNovelSource()
+        ) +
             novelSites.map { (name, url) ->
                 when {
                     name == "LunarX" -> LunarXSource()
