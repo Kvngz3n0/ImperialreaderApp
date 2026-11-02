@@ -16,7 +16,6 @@ object StartupStarAnimation {
     fun show(activity: Activity) {
         val decor = activity.window.decorView as? ViewGroup ?: return
         val density = activity.resources.displayMetrics.density
-        val overlaySize = (96 * density).toInt()
         val overlay = FrameLayout(activity).apply {
             isClickable = false
             isFocusable = false
@@ -40,8 +39,11 @@ object StartupStarAnimation {
             FrameLayout.LayoutParams(starSize, starSize, Gravity.CENTER)
         )
 
-        val params = FrameLayout.LayoutParams(overlaySize, overlaySize, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
-        params.bottomMargin = (88 * density).toInt()
+        val params = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            Gravity.CENTER
+        )
         decor.addView(overlay, params)
         sparkles.start()
         overlay.postDelayed({
@@ -50,7 +52,7 @@ object StartupStarAnimation {
         }, ANIMATION_DURATION_MS)
     }
 
-    private const val ANIMATION_DURATION_MS = 1400L
+    private const val ANIMATION_DURATION_MS = 3000L
 
     private class SparkleBurstView(activity: Activity) : View(activity) {
         private val density = resources.displayMetrics.density
