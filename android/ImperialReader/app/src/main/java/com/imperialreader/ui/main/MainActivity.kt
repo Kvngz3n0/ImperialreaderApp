@@ -15,6 +15,7 @@ import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.data.update.AutomaticAppUpdateScheduler
 import com.imperialreader.data.update.LibraryUpdateScheduler
 import com.imperialreader.data.update.LibraryRefreshNotification
+import com.imperialreader.ui.common.StartupStarAnimation
 import com.imperialreader.util.app
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -29,6 +30,7 @@ import com.imperialreader.ui.more.MoreFragment
 import com.imperialreader.ui.updates.UpdatesFragment
 
 class MainActivity : androidx.appcompat.app.AppCompatActivity() {
+    private var startupAnimationPending = false
 
     companion object {
         private var refreshedThisProcess = false
@@ -40,6 +42,7 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        startupAnimationPending = savedInstanceState == null
         setContentView(R.layout.activity_main)
 
         val nav = findViewById<BottomNavigationView>(R.id.nav)
@@ -112,6 +115,14 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
         ) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    fun showStartupAnimationIfPending(delayMillis: Long = 0L) {
+        if (!startupAnimationPending) return
+        startupAnimationPending = false
+        window.decorView.postDelayed({
+            if (!isFinishing && !isDestroyed) StartupStarAnimation.show(this)
+        }, delayMillis)
     }
 
     override fun onPostResume() {
