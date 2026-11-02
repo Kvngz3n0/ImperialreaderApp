@@ -35,7 +35,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Discover and search
 
-- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including RavenScans.org, AllPornComic, Pawchive, and Comix.to.
+- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including Roliascans, RavenScans.org, AllPornComic, Pawchive, and Comix.to.
 - Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and supported web-novel sites. Internet Archive results include readable EPUB and PDF files.
 - Search across online catalogs from **Browse** or from the library's global search. Global search preserves same-title results from separate catalogs, combines manga sources when requested, and offers optional genre/tag and artist filters.
 - Add a custom manga site by name and URL. Imperial Reader attempts to detect supported site engines when you first open it.

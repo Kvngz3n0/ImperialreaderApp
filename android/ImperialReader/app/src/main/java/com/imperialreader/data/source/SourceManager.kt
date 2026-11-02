@@ -25,6 +25,7 @@ class SourceManager(private val context: Context) {
         EHentaiSource(),
         TapasSource(),
         ReadComicsOnlineSource(),
+        RoliaScanSource(),
         // Confirmed against the live site: WordPress + MangaThemesia (/manga/?order=update, chapters at /<slug>-chapter-N/)
         MangaThemesiaSource("KingOfShojo", "https://kingofshojo.com"),
         NightScanSource(),
