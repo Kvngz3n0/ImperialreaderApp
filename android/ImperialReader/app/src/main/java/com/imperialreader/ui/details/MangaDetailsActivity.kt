@@ -147,6 +147,9 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         }
 
         toolbar = findViewById(R.id.toolbar)
+        toolbar.setTitleTextColor(getColor(R.color.gold_light))
+        toolbar.setNavigationIconTint(getColor(R.color.gold))
+        toolbar.overflowIcon?.setTint(getColor(R.color.gold))
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.inflateMenu(R.menu.details_menu)
         toolbar.setOnMenuItemClickListener { onMenu(it.itemId); true }
@@ -897,7 +900,7 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             h.genres.text = manga.genre.orEmpty()
             h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
             h.chapters.text = "$count chapters"
-            h.title.setTextColor(getColor(R.color.on_surface))
+            h.title.setTextColor(getColor(R.color.gold_light))
             h.author.setTextColor(getColor(R.color.on_surface_variant))
             h.status.setTextColor(getColor(R.color.on_surface_variant))
             h.desc.setTextColor(getColor(R.color.on_surface))
@@ -1000,7 +1003,7 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             val c = row.chapter
             h.title.text = (if (c.bookmark) "★ " else "") + c.name
             h.title.alpha = if (c.read) 0.5f else 1f
-            h.title.setTextColor(getColor(R.color.on_surface))
+            h.title.setTextColor(getColor(R.color.gold_light))
             h.selectionMark.visibility = if (row.selected) View.VISIBLE else View.GONE
             h.sub.text = listOfNotNull(
                 relativeTime(c.dateUpload).takeIf { it.isNotBlank() },
