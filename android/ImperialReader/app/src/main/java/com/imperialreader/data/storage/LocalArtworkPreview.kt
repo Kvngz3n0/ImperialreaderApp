@@ -6,10 +6,13 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import java.io.BufferedInputStream
+import java.io.EOFException
 import java.io.File
 import java.io.FileInputStream
+import java.io.InputStream
 import java.io.IOException
 import java.io.RandomAccessFile
+import java.util.zip.InflaterInputStream
 import java.util.zip.ZipException
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -26,10 +29,11 @@ object LocalArtworkPreview {
         if (!directory.exists() && !directory.mkdirs()) {
             throw IOException("Could not create the local artwork preview folder")
         }
-        val key = "${document.uri.hashCode()}_${document.lastModified()}_${document.length()}"
+        val decoderVersion = if (document.name.orEmpty().endsWith(".psd", true)) "_psd2" else ""
+        val key = "${document.uri.hashCode()}_${document.lastModified()}_${document.length()}$decoderVersion"
         val target = File(directory, "$key.png")
         if ((!target.exists() || target.length() == 0L) && !extract(context, document, target)) {
-            throw IOException("Could not read an embedded preview from ${document.name}")
+            throw IOException("Could not decode a preview from ${document.name}")
         }
         return Uri.fromFile(target).toString()
     }
@@ -48,6 +52,9 @@ object LocalArtworkPreview {
                 return true
             }
             if (document.name.orEmpty().endsWith(".psd", true) && extractPsdThumbnail(staged, target)) {
+                return true
+            }
+            if (document.name.orEmpty().endsWith(".psd", true) && extractPsdComposite(staged, target)) {
                 return true
             }
             return extractEmbeddedImage(staged, target)
@@ -153,6 +160,237 @@ object LocalArtworkPreview {
         }
         return false
     }
+
+    private fun extractPsdComposite(file: File, target: File): Boolean {
+        return try {
+            RandomAccessFile(file, "r").use { input ->
+                if (input.length() < PSD_HEADER_SIZE) return false
+                val signature = ByteArray(4)
+                input.readFully(signature)
+                if (String(signature, Charsets.US_ASCII) != "8BPS" ||
+                    input.readUnsignedShort() != PSD_VERSION
+                ) return false
+                input.skipBytes(6)
+
+                val channelCount = input.readUnsignedShort()
+                val height = readUInt32(input)
+                val width = readUInt32(input)
+                val depth = input.readUnsignedShort()
+                val colorMode = input.readUnsignedShort()
+                if (width !in 1L..MAX_PSD_DIMENSION.toLong() ||
+                    height !in 1L..MAX_PSD_DIMENSION.toLong() ||
+                    channelCount !in 1..MAX_PSD_CHANNELS || depth !in setOf(8, 16) ||
+                    (colorMode == PSD_INDEXED && depth != 8) ||
+                    colorMode !in setOf(PSD_RGB, PSD_GRAYSCALE, PSD_INDEXED)
+                ) return false
+                if (width * height * channelCount * (depth / 8) > MAX_PSD_COMPOSITE_BYTES) {
+                    return false
+                }
+                val widthPx = width.toInt()
+                val heightPx = height.toInt()
+                val baseChannels = when (colorMode) {
+                    PSD_RGB -> 3
+                    PSD_GRAYSCALE, PSD_INDEXED -> 1
+                    else -> return false
+                }
+                if (channelCount < baseChannels) return false
+
+                val colorDataLength = readUInt32(input)
+                if (!sectionFits(input, colorDataLength)) return false
+                val colorDataStart = input.filePointer
+                val palette = if (colorMode == PSD_INDEXED && colorDataLength >= PSD_PALETTE_SIZE) {
+                    ByteArray(PSD_PALETTE_SIZE.toInt()).also(input::readFully)
+                } else {
+                    null
+                }
+                input.seek(colorDataStart + colorDataLength)
+                val resourcesLength = readUInt32(input)
+                if (!sectionFits(input, resourcesLength)) return false
+                input.seek(input.filePointer + resourcesLength)
+                val layerMaskLength = readUInt32(input)
+                if (!sectionFits(input, layerMaskLength)) return false
+                input.seek(input.filePointer + layerMaskLength)
+
+                val compression = input.readUnsignedShort()
+                if (compression !in PSD_RAW..PSD_ZIP_PREDICTION ||
+                    (compression == PSD_ZIP_PREDICTION && depth != 8)
+                ) return false
+
+                val sample = psdSampleSize(widthPx, heightPx)
+                val outputWidth = (widthPx + sample - 1) / sample
+                val outputHeight = (heightPx + sample - 1) / sample
+                val pixelCount = outputWidth * outputHeight
+                val rowByteCount = widthPx * (depth / 8)
+                val sampledChannels = Array(baseChannels + if (channelCount > baseChannels) 1 else 0) {
+                    ByteArray(pixelCount)
+                }
+                val row = ByteArray(rowByteCount)
+                val rowLengths = if (compression == PSD_RLE) {
+                    val count = channelCount.toLong() * height
+                    if (count > Int.MAX_VALUE) return false
+                    IntArray(count.toInt()) {
+                        input.readUnsignedShort()
+                    }.also { lengths ->
+                        if (lengths.any { it > rowByteCount * 2 + 16 }) return false
+                    }
+                } else {
+                    null
+                }
+
+                val imageStream = if (compression == PSD_ZIP || compression == PSD_ZIP_PREDICTION) {
+                    InflaterInputStream(object : InputStream() {
+                        override fun read(): Int = input.read()
+
+                        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+                            input.read(buffer, offset, length)
+                    })
+                } else {
+                    null
+                }
+
+                try {
+                    for (channel in 0 until channelCount) {
+                        val outputChannel = when {
+                            channel < baseChannels -> channel
+                            channel == baseChannels -> baseChannels
+                            else -> -1
+                        }
+                        for (y in 0 until heightPx) {
+                            when (compression) {
+                                PSD_RAW -> input.readFully(row)
+                                PSD_RLE -> {
+                                    val length = rowLengths!![channel * heightPx + y]
+                                    val packed = ByteArray(length)
+                                    input.readFully(packed)
+                                    if (!decodePackBits(packed, row)) return false
+                                }
+                                PSD_ZIP, PSD_ZIP_PREDICTION -> {
+                                    if (!readFully(imageStream!!, row)) return false
+                                    if (compression == PSD_ZIP_PREDICTION) undoPsdPrediction(row)
+                                }
+                            }
+                            if (outputChannel >= 0 && y % sample == 0) {
+                                val sampledY = y / sample
+                                for (x in 0 until widthPx step sample) {
+                                    val sampleIndex = x * (depth / 8)
+                                    sampledChannels[outputChannel][sampledY * outputWidth + x / sample] =
+                                        row[sampleIndex]
+                                }
+                            }
+                        }
+                    }
+                } finally {
+                    imageStream?.close()
+                }
+
+                if (colorMode == PSD_INDEXED && palette == null) return false
+                val bitmap = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888)
+                try {
+                    val pixels = IntArray(outputWidth)
+                    val alphaChannel = if (channelCount > baseChannels) baseChannels else -1
+                    for (y in 0 until outputHeight) {
+                        for (x in 0 until outputWidth) {
+                            val index = y * outputWidth + x
+                            val alpha = if (alphaChannel >= 0) {
+                                unsignedSample(sampledChannels[alphaChannel][index])
+                            } else {
+                                255
+                            }
+                            val red: Int
+                            val green: Int
+                            val blue: Int
+                            when (colorMode) {
+                                PSD_RGB -> {
+                                    red = unsignedSample(sampledChannels[0][index])
+                                    green = unsignedSample(sampledChannels[1][index])
+                                    blue = unsignedSample(sampledChannels[2][index])
+                                }
+                                PSD_GRAYSCALE -> {
+                                    red = unsignedSample(sampledChannels[0][index])
+                                    green = red
+                                    blue = red
+                                }
+                                else -> {
+                                    val paletteIndex = sampledChannels[0][index].toInt() and 0xff
+                                    red = palette!![paletteIndex].toInt() and 0xff
+                                    green = palette[paletteIndex + 256].toInt() and 0xff
+                                    blue = palette[paletteIndex + 512].toInt() and 0xff
+                                }
+                            }
+                            pixels[x] = (alpha shl 24) or (red shl 16) or (green shl 8) or blue
+                        }
+                        bitmap.setPixels(pixels, 0, outputWidth, 0, y, outputWidth, 1)
+                    }
+                    save(bitmap, target)
+                } catch (e: Exception) {
+                    bitmap.recycle()
+                    throw e
+                }
+                true
+            }
+        } catch (_: EOFException) {
+            false
+        } catch (_: ZipException) {
+            false
+        }
+    }
+
+    private fun sectionFits(input: RandomAccessFile, length: Long): Boolean =
+        length <= input.length() - input.filePointer
+
+    private fun psdSampleSize(width: Int, height: Int): Int {
+        var sample = sampleSize(width, height)
+        while ((width.toLong() + sample - 1) / sample *
+            ((height.toLong() + sample - 1) / sample) > MAX_PSD_PREVIEW_PIXELS
+        ) {
+            sample *= 2
+        }
+        return sample
+    }
+
+    private fun decodePackBits(packed: ByteArray, output: ByteArray): Boolean {
+        var inputIndex = 0
+        var outputIndex = 0
+        while (inputIndex < packed.size && outputIndex < output.size) {
+            val control = packed[inputIndex++].toInt()
+            when {
+                control in 0..127 -> {
+                    val count = control + 1
+                    if (inputIndex + count > packed.size || outputIndex + count > output.size) return false
+                    packed.copyInto(output, outputIndex, inputIndex, inputIndex + count)
+                    inputIndex += count
+                    outputIndex += count
+                }
+                control in -127..-1 -> {
+                    if (inputIndex >= packed.size) return false
+                    val count = 1 - control
+                    if (outputIndex + count > output.size) return false
+                    output.fill(packed[inputIndex++], outputIndex, outputIndex + count)
+                    outputIndex += count
+                }
+                else -> Unit
+            }
+        }
+        return outputIndex == output.size
+    }
+
+    private fun undoPsdPrediction(row: ByteArray) {
+        for (index in 1 until row.size) {
+            row[index] = (row[index].toInt() + row[index - 1].toInt()).toByte()
+        }
+    }
+
+    private fun readFully(input: InputStream, buffer: ByteArray): Boolean {
+        var offset = 0
+        while (offset < buffer.size) {
+            val count = input.read(buffer, offset, buffer.size - offset)
+            if (count < 0) return false
+            offset += count
+        }
+        return true
+    }
+
+    private fun unsignedSample(value: Byte): Int = value.toInt() and 0xff
 
     private fun extractEmbeddedImage(file: File, target: File): Boolean {
         val offsets = imageOffsets(file)
@@ -280,6 +518,20 @@ object LocalArtworkPreview {
     private const val MAX_THUMBNAIL_BYTES = 64L * 1024L * 1024L
     private const val MAX_CLIP_ENTRY_BYTES = 128L * 1024L * 1024L
     private const val MAX_CLIP_CANDIDATES = 64
+    private const val PSD_HEADER_SIZE = 30L
+    private const val PSD_VERSION = 1
+    private const val PSD_RGB = 3
+    private const val PSD_INDEXED = 2
+    private const val PSD_GRAYSCALE = 1
+    private const val PSD_RAW = 0
+    private const val PSD_RLE = 1
+    private const val PSD_ZIP = 2
+    private const val PSD_ZIP_PREDICTION = 3
+    private const val PSD_PALETTE_SIZE = 768L
+    private const val MAX_PSD_DIMENSION = 30000
+    private const val MAX_PSD_CHANNELS = 8
+    private const val MAX_PSD_PREVIEW_PIXELS = 3_000_000L
+    private const val MAX_PSD_COMPOSITE_BYTES = 512L * 1024L * 1024L
     private const val JPEG_THUMBNAIL_FORMAT = 1L
     private val THUMBNAIL_RESOURCE_IDS = setOf(1033, 1036)
     private val PREVIEW_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
