@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import com.imperialreader.data.network.await
@@ -233,7 +234,7 @@ class EHentaiSource : HttpSource() {
             .mapNotNull { link ->
                 val address = link.absUrl("href")
                 val gallery = galleryAddress(address) ?: return@mapNotNull null
-                val img = link.selectFirst("img")
+                val img = link.selectFirst("img, [style*=background-image]")
                 val title = sequenceOf(link.attr("title"), img?.attr("alt").orEmpty(), link.text())
                     .map { it.trim() }.firstOrNull { it.isNotBlank() && it.length < 300 }
                     ?: return@mapNotNull null
@@ -254,10 +255,21 @@ class EHentaiSource : HttpSource() {
 
     override suspend fun getMangaDetails(manga: SManga): SManga {
         val address = galleryAddress(manga.url) ?: throw IOException("Invalid E-Hentai gallery address")
-        val meta = galleryMetadata(address)
+        val meta = try {
+            galleryMetadata(address)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: IOException) {
+            val doc = Jsoup.parse(getString(address.url), address.url)
+            manga.title = doc.selectFirst("#gn, h1")?.text()?.trim()?.ifBlank { null } ?: manga.title
+            manga.thumbnailUrl = galleryPageCover(doc) ?: manga.thumbnailUrl
+            return manga
+        }
         if (meta.optBoolean("expunged")) throw IOException("This E-Hentai gallery has been removed")
         manga.title = meta.optString("title").ifBlank { manga.title }
-        manga.thumbnailUrl = meta.optString("thumb").takeIf { it.startsWith("https://") } ?: manga.thumbnailUrl
+        manga.thumbnailUrl = coverUrl(meta.optString("thumb"))
+            ?: galleryPageCover(address)
+            ?: manga.thumbnailUrl
         val tags = meta.optJSONArray("tags") ?: JSONArray()
         val artists = mutableListOf<String>()
         val genres = mutableListOf<String>()
@@ -281,17 +293,33 @@ class EHentaiSource : HttpSource() {
 
     override suspend fun getChapters(manga: SManga): List<SChapter> {
         val address = galleryAddress(manga.url) ?: throw IOException("Invalid E-Hentai gallery address")
-        val metadata = galleryMetadata(address)
-        if (metadata.optBoolean("expunged")) throw IOException("This E-Hentai gallery has been removed")
-        val count = metadata.optInt("filecount", 0)
+        val metadata = try {
+            galleryMetadata(address)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: IOException) {
+            null
+        }
+        if (metadata?.optBoolean("expunged") == true) {
+            throw IOException("This E-Hentai gallery has been removed")
+        }
+        val count = metadata?.optInt("filecount", 0)?.takeIf { it > 0 }
+            ?: galleryPageCount(address)
         if (count <= 0) throw IOException("E-Hentai returned an empty gallery")
         return listOf(SChapter(address.url, "Gallery ($count pages)", chapterNumber = 1f))
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {
         val address = galleryAddress(chapter.url) ?: throw IOException("Invalid E-Hentai gallery address")
-        val metadata = galleryMetadata(address)
-        val count = metadata.optInt("filecount", 0)
+        val metadata = try {
+            galleryMetadata(address)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: IOException) {
+            null
+        }
+        val count = metadata?.optInt("filecount", 0)?.takeIf { it > 0 }
+            ?: galleryPageCount(address)
         if (count <= 0 || count > MAX_GALLERY_PAGES) {
             throw IOException("E-Hentai returned an invalid gallery page count")
         }
@@ -337,18 +365,62 @@ class EHentaiSource : HttpSource() {
             .put("method", "gdata")
             .put("gidlist", JSONArray().put(JSONArray().put(address.id).put(address.token)))
             .put("namespace", 1)
-        val request = Request.Builder()
-            .url(apiUrl)
-            .header("Accept", "application/json")
-            .header("Referer", "$baseUrl/")
-            .post(payload.toString().toRequestBody(jsonType))
-            .build()
-        return client.await(request).use { response ->
-            if (!response.isSuccessful) throw HttpStatusException(response.code, apiUrl)
-            val galleries = JSONObject(response.body?.string().orEmpty()).optJSONArray("gmetadata")
-                ?: throw IOException("E-Hentai returned no gallery metadata")
-            galleries.optJSONObject(0) ?: throw IOException("E-Hentai returned no gallery metadata")
+        var lastFailure: IOException? = null
+        repeat(METADATA_ATTEMPTS) { attempt ->
+            try {
+                val request = Request.Builder()
+                    .url(apiUrl)
+                    .header("Accept", "application/json")
+                    .header("Referer", "$baseUrl/")
+                    .post(payload.toString().toRequestBody(jsonType))
+                    .build()
+                val metadata = client.await(request).use { response ->
+                    if (!response.isSuccessful) throw HttpStatusException(response.code, apiUrl)
+                    val galleries = JSONObject(response.body?.string().orEmpty()).optJSONArray("gmetadata")
+                        ?: throw IOException("E-Hentai returned no gallery metadata")
+                    galleries.optJSONObject(0) ?: throw IOException("E-Hentai returned no gallery metadata")
+                }
+                val apiError = metadata.optString("error").takeIf { it.isNotBlank() }
+                if (apiError != null) throw IOException("E-Hentai API error: $apiError")
+                return metadata
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: HttpStatusException) {
+                if (e.code != 429 && e.code !in 500..599) throw e
+                lastFailure = e
+            } catch (e: org.json.JSONException) {
+                lastFailure = IOException("E-Hentai returned invalid gallery metadata", e)
+            } catch (e: IOException) {
+                lastFailure = e
+            }
+            if (attempt < METADATA_ATTEMPTS - 1) delay(METADATA_RETRY_DELAY_MS * (attempt + 1))
         }
+        throw lastFailure ?: IOException("E-Hentai returned no gallery metadata")
+    }
+
+    private suspend fun galleryPageCount(address: GalleryAddress): Int {
+        val doc = Jsoup.parse(getString(address.url), address.url)
+        val pageCount = Regex("""(?i)\b([\d,]+)\s+pages?\b""")
+        return doc.select("#gdd tr, #gdd .gdt2, #gdd")
+            .asSequence()
+            .mapNotNull { element ->
+                pageCount.find(element.text())?.groupValues?.get(1)
+                    ?.replace(",", "")?.toIntOrNull()
+            }
+            .firstOrNull { it > 0 }
+            ?: throw IOException("E-Hentai did not report a gallery page count")
+    }
+
+    private suspend fun galleryPageCover(address: GalleryAddress): String? {
+        val doc = Jsoup.parse(getString(address.url), address.url)
+        return galleryPageCover(doc)
+    }
+
+    private fun galleryPageCover(doc: Document): String? {
+        val socialCover = doc.selectFirst("meta[property=og:image]")?.attr("content")
+            ?.let(::coverUrl)
+        return socialCover ?: doc.selectFirst("#gd1 img, #gimg, .gdtm img, #gd1 [style*=background-image]")
+            ?.let(::imageUrl)
     }
 
     private fun galleryAddress(url: String): GalleryAddress? {
@@ -372,9 +444,36 @@ class EHentaiSource : HttpSource() {
         runCatching { URI(url).rawQuery.orEmpty().substringAfter("p=", "").substringBefore('&').toInt() }
             .getOrDefault(0)
 
-    private fun imageUrl(image: Element): String? =
-        sequenceOf(image.attr("data-src"), image.attr("data-original"), image.attr("src"))
-            .firstOrNull { it.startsWith("https://") && !it.contains("placeholder", true) }
+    private fun imageUrl(image: Element): String? {
+        val attributes = listOf(
+            "data-src", "data-original", "data-lazy-src", "data-thumb", "data-cfsrc",
+            "src", "data-srcset", "srcset"
+        )
+        val fromAttribute = attributes.asSequence().mapNotNull { attribute ->
+            val raw = image.attr(attribute)
+                .substringBefore(',')
+                .trim()
+                .split(Regex("""\s+"""))
+                .firstOrNull()
+                ?.takeIf { it.isNotBlank() && !it.startsWith("data:", ignoreCase = true) }
+                ?: return@mapNotNull null
+            coverUrl(raw)
+        }.firstOrNull()
+        if (fromAttribute != null) return fromAttribute
+        val background = Regex("""(?i)url\(['"]?([^)'"]+)""")
+            .find(image.attr("style"))?.groupValues?.get(1)
+        return background?.let(::coverUrl)
+    }
+
+    private fun coverUrl(raw: String): String? {
+        val value = raw.trim()
+            .takeIf { it.isNotBlank() && !it.startsWith("data:", ignoreCase = true) }
+            ?: return null
+        val uri = runCatching { URI(baseUrl).resolve(value) }.getOrNull() ?: return null
+        if (uri.host.isNullOrBlank() || uri.scheme !in setOf("https", "http")) return null
+        return uri.toString().replaceFirst(Regex("^http://", RegexOption.IGNORE_CASE), "https://")
+            .takeUnless { it.contains("placeholder", true) || it.contains("loading", true) }
+    }
 
     private fun isReaderImage(url: String): Boolean {
         val uri = runCatching { URI(url) }.getOrNull() ?: return false
@@ -391,5 +490,7 @@ class EHentaiSource : HttpSource() {
     private companion object {
         const val GALLERY_INDEX_PAGE_SIZE = 40
         const val MAX_GALLERY_PAGES = 2_000
+        const val METADATA_ATTEMPTS = 3
+        const val METADATA_RETRY_DELAY_MS = 350L
     }
 }

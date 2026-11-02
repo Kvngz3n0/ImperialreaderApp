@@ -24,7 +24,6 @@ class SourceManager(private val context: Context) {
         DoujinsSource(),
         EHentaiSource(),
         TapasSource(),
-        ComicHubFreeSource(),
         ReadComicsOnlineSource(),
         // Confirmed against the live site: WordPress + MangaThemesia (/manga/?order=update, chapters at /<slug>-chapter-N/)
         MangaThemesiaSource("KingOfShojo", "https://kingofshojo.com"),
@@ -52,7 +51,6 @@ class SourceManager(private val context: Context) {
             nsfw = true
         ),
         PawchiveSource(),
-        ComixSource(),
         // Western comics
         WordPressSource("TritiniaScans", "https://tritinia.org"),
         WordPressSource("VortexScans", "https://vortexscans.org"),
