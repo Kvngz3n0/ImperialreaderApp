@@ -29,14 +29,14 @@ For manga and comics, tap the reader to show controls. Choose left-to-right, rig
 2. Put local files under `local/<Title>/`. Each archive, PDF, EPUB, PSD, PSB, CLIP, or image subfolder is treated as a chapter. PSD, PSB, and CLIP files use an embedded flattened preview when available; layered editing is not supported.
 3. Choose **More → Scan local library** to import or refresh your local titles.
 
-PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs and PDFs, or browse supported web-novel catalogs including NovelArrow and RoliaScans Novels. Downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
+PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs and PDFs, or browse supported web-novel catalogs including NovelArrow and RoliaScans Novels. The RoliaScans novel extension lists text novels and their chapters; downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
 
 ## What it can do
 
 ### Discover and search
 
-- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including Roliascans, RavenScans.org, AllPornComic, Pawchive, and Comix.to.
-- Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and supported web-novel sites. Internet Archive results include readable EPUB and PDF files.
+- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including Roliascans, RavenScans.org, AllPornComic, and Pawchive.
+- Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and RoliaScans Novels. Internet Archive results include readable EPUB and PDF files.
 - Search across online catalogs from **Browse** or from the library's global search. Global search preserves same-title results from separate catalogs, combines manga sources when requested, and offers optional genre/tag and artist filters.
 - Add a custom manga site by name and URL. Imperial Reader attempts to detect supported site engines when you first open it.
 - Enable or disable sources and open a source in the in-app WebView. The WebView can help with sites that require a Cloudflare challenge.
@@ -54,7 +54,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Read, track, and download
 
-- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts. Animated GIF pages and Pawchive MP4 posts are supported.
+- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts. Animated GIF pages and Pawchive MP4 posts are supported; on Pawchive videos, tap the video-controls button to show or hide playback controls.
 - Resume reading progress, move between chapters, and optionally use screen-edge taps or volume keys for page navigation.
 - Bookmark chapters, mark chapters read or unread, and see reading history. Incognito mode disables reading-history entries.
 - Queue chapter downloads, follow the queue in **More**, and read downloaded chapters offline. Large multi-chapter downloads are grouped by title and can be paused or resumed together.
@@ -63,7 +63,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Local files and backups
 
-- Read online PSD and PSB chapter pages by converting their flattened composite previews to cached images, including downloaded pages.
+- Read online and downloaded PSD and PSB chapter pages by converting their flattened composite previews to cached images.
 - Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, PSB, and CLIP files as library titles. PSD, PSB, and CLIP reading uses embedded previews when available.
 - Read local titles from the library and refresh the scan when files change.
 - Choose where downloads and local files are stored; without a selected folder, the app uses private app storage.
