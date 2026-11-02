@@ -106,16 +106,6 @@
             </LinearLayout>
         </LinearLayout>
 
-        <LinearLayout android:id="@+id/rowAppUpdate" style="@style/MoreRow">
-            <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_download" android:contentDescription="app update"/>
-            <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
-                android:layout_weight="1" android:orientation="vertical">
-                <TextView style="@style/MoreRowTitle" android:text="Check for app updates"/>
-                <TextView android:id="@+id/appUpdateSub" style="@style/MoreRowSub"
-                    android:text="Install the latest APK from the V9 release"/>
-            </LinearLayout>
-        </LinearLayout>
-
         <LinearLayout android:id="@+id/rowAbout" style="@style/MoreRow">
             <ImageView style="@style/MoreRowIcon" android:src="@drawable/ic_info" android:contentDescription="about"/>
             <TextView style="@style/MoreRowTitle" android:text="About"/>
