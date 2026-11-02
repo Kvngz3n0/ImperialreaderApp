@@ -13,7 +13,6 @@
         <item name="colorOnSurface">@color/on_surface</item>
         <item name="colorSurfaceVariant">@color/card</item>
         <item name="colorOnSurfaceVariant">@color/on_surface_variant</item>
-        <item name="colorControlHighlight">@color/gold_ripple</item>
         <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Imperial.Small</item>
         <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Imperial.Medium</item>
         <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Imperial.Large</item>

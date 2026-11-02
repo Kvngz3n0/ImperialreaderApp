@@ -1,7 +1,7 @@
 # Imperial Reader
 
 A Mihon/Tachiyomi-style manga reader for Android (Kotlin, Views + Material 3, Room, OkHttp, Jsoup, Coil).
-Muted charcoal-and-gold "Imperial" theme with Material You dynamic colors where supported, Mihon layout: **Library · Updates · History · Browse · More**.
+Material You dynamic colors, Mihon layout: **Library · Updates · History · Browse · More**.
 
 ## Features
 
