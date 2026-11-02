@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.RectF
+import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.view.GestureDetector
 import android.view.MotionEvent
@@ -212,6 +213,7 @@ class PageAdapter(
         val image: ZoomablePageImageView,
         val video: VideoView,
         val mediaController: MediaController,
+        val videoControlsButton: TextView,
         val progress: ProgressBar,
         val error: TextView
     ) : RecyclerView.ViewHolder(root)
@@ -237,6 +239,27 @@ class PageAdapter(
         }
         val mediaController = MediaController(ctx).apply { setAnchorView(root) }
         video.setMediaController(mediaController)
+        val videoControlsButton = TextView(ctx).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+            ).apply {
+                topMargin = ctx.dp(16)
+            }
+            setTextColor(android.graphics.Color.WHITE)
+            textSize = 12f
+            setPadding(ctx.dp(12), ctx.dp(8), ctx.dp(12), ctx.dp(8))
+            background = GradientDrawable().apply {
+                setColor(0xCC202020.toInt())
+                cornerRadius = ctx.dp(20).toFloat()
+            }
+            text = "VIDEO  |  TAP FOR CONTROLS"
+            contentDescription = "Video. Tap to show playback controls"
+            isClickable = true
+            isFocusable = true
+            visibility = View.GONE
+        }
         val progress = ProgressBar(ctx).apply {
             isIndeterminate = true
             layoutParams = FrameLayout.LayoutParams(ctx.dp(36), ctx.dp(36), android.view.Gravity.CENTER)
@@ -250,9 +273,10 @@ class PageAdapter(
         }
         root.addView(image)
         root.addView(video)
+        root.addView(videoControlsButton)
         root.addView(progress)
         root.addView(error)
-        return VH(root, image, video, mediaController, progress, error)
+        return VH(root, image, video, mediaController, videoControlsButton, progress, error)
     }
 
     override fun onBindViewHolder(h: VH, position: Int) {
@@ -270,6 +294,9 @@ class PageAdapter(
                 holder.video.stopPlayback()
                 holder.video.visibility = View.GONE
                 holder.mediaController.hide()
+                holder.videoControlsButton.visibility = View.GONE
+                holder.videoControlsButton.setOnClickListener(null)
+                holder.video.setOnClickListener(null)
                 holder.progress.visibility = View.GONE
             }
         }
@@ -305,6 +332,9 @@ class PageAdapter(
             h.video.setOnErrorListener(null)
             h.mediaController.hide()
             h.video.visibility = View.GONE
+            h.videoControlsButton.visibility = View.GONE
+            h.videoControlsButton.setOnClickListener(null)
+            h.video.setOnClickListener(null)
             h.image.load(null)
             h.image.visibility = View.GONE
             h.image.setOnLongClickListener(null)
@@ -319,6 +349,28 @@ class PageAdapter(
             h.image.setImageDrawable(null)
             h.image.setOnLongClickListener(null)
             h.video.visibility = View.VISIBLE
+            h.videoControlsButton.visibility =
+                if (isPawchiveVideo(url)) View.VISIBLE else View.GONE
+            h.videoControlsButton.text = "VIDEO  |  TAP FOR CONTROLS"
+            h.videoControlsButton.contentDescription = "Video. Tap to show playback controls"
+            h.videoControlsButton.setOnClickListener {
+                if (h.mediaController.isShowing) {
+                    h.mediaController.hide()
+                    h.videoControlsButton.text = "VIDEO  |  TAP FOR CONTROLS"
+                    h.videoControlsButton.contentDescription = "Video. Tap to show playback controls"
+                } else {
+                    h.mediaController.show(0)
+                    h.videoControlsButton.text = "VIDEO  |  HIDE CONTROLS"
+                    h.videoControlsButton.contentDescription = "Video. Tap to hide playback controls"
+                }
+            }
+            h.video.setOnClickListener {
+                if (!h.mediaController.isShowing) {
+                    h.mediaController.show(0)
+                    h.videoControlsButton.text = "VIDEO  |  HIDE CONTROLS"
+                    h.videoControlsButton.contentDescription = "Video. Tap to hide playback controls"
+                }
+            }
             h.video.setOnPreparedListener { player ->
                 if (h.bindingAdapterPosition != position) return@setOnPreparedListener
                 if (isPawchiveVideo(url) && position != activePage) {
@@ -330,7 +382,6 @@ class PageAdapter(
                 h.progress.visibility = View.GONE
                 h.root.minimumHeight = 0
                 player.isLooping = true
-                h.mediaController.show(0)
             }
             h.video.setOnErrorListener { _, _, _ ->
                 if (h.bindingAdapterPosition == position) {
@@ -349,6 +400,9 @@ class PageAdapter(
         h.video.setOnErrorListener(null)
         h.mediaController.hide()
         h.video.visibility = View.GONE
+        h.videoControlsButton.visibility = View.GONE
+        h.videoControlsButton.setOnClickListener(null)
+        h.video.setOnClickListener(null)
         h.image.visibility = View.VISIBLE
         h.image.setOnLongClickListener {
             onSavePage(h.image, url)
@@ -408,6 +462,9 @@ class PageAdapter(
         holder.video.setOnErrorListener(null)
         holder.mediaController.hide()
         holder.video.visibility = View.GONE
+        holder.videoControlsButton.visibility = View.GONE
+        holder.videoControlsButton.setOnClickListener(null)
+        holder.video.setOnClickListener(null)
         if (webtoon) holder.root.minimumHeight = holder.root.context.dp(320)
         super.onViewRecycled(holder)
     }
