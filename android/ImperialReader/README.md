@@ -14,7 +14,7 @@ Black-and-aged-gold "Imperial" theme, Mihon layout: **Library · Updates · Hist
 | Built-in sources | MangaDex (official API) + a list of Madara-theme sites (see "Sources" below) |
 | Details | Cover/info header, temporary cover-matched colors while the chapter list is open, add to library, chapter list with read / bookmark / download state, Start / Resume / Read again |
 | Reader | Left-to-right, right-to-left, vertical webtoon, tap zones, seek bar, prev/next chapter, volume keys, progress + history saving, fullscreen, keep-screen-on, GIF pages, and MP4 playback |
-| Local library | Import a manga folder from **Browse → Extensions → Local**, or use **More → Scan local library**. Reads image folders, CBZ, ZIP, CBR/RAR, PDF, EPUB, PSD, and CLIP chapters; PSD/CLIP use embedded previews when present. Refresh detects added, renamed, and removed chapter files in the configured `local/` folder. |
+| Local library | Import a manga folder from **Browse → Extensions → Local**, or use **More → Scan local library**. Reads image folders, CBZ, ZIP, CBR/RAR, PDF, EPUB, PSD, PSB, and CLIP chapters; PSD/PSB/CLIP use embedded previews when present. Refresh detects added, renamed, and removed chapter files in the configured `local/` folder. |
 | EPUB / web novels | Light-novel reading controls, section seek/progress, contents list, font size, dark/sepia/light themes, and text-to-speech |
 | PDF | Local PDFs open in a paged reader with page seeking, previous/next controls, and persisted page progress |
 | Downloads | Foreground-service queue, 3 parallel pages, stored in `downloads/<Source (LANG)>/<Manga>/<Chapter>/001.jpg` (MP4 media is saved as `.mp4`) |

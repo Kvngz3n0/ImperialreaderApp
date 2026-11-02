@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.imperialreader.data.network.await
+import com.imperialreader.util.app
 import java.io.BufferedInputStream
 import java.io.EOFException
 import java.io.File
@@ -21,7 +23,7 @@ object LocalArtworkPreview {
 
     fun supports(name: String?): Boolean {
         val extension = name?.substringAfterLast('.', "")?.lowercase() ?: return false
-        return extension == "psd" || extension == "clip"
+        return extension == "psd" || extension == "psb" || extension == "clip"
     }
 
     fun readerPage(context: Context, document: DocumentFile): String {
@@ -29,7 +31,10 @@ object LocalArtworkPreview {
         if (!directory.exists() && !directory.mkdirs()) {
             throw IOException("Could not create the local artwork preview folder")
         }
-        val decoderVersion = if (document.name.orEmpty().endsWith(".psd", true)) "_psd2" else ""
+        val isPhotoshop = document.name.orEmpty().let {
+            it.endsWith(".psd", true) || it.endsWith(".psb", true)
+        }
+        val decoderVersion = if (isPhotoshop) "_photoshop2" else ""
         val key = "${document.uri.hashCode()}_${document.lastModified()}_${document.length()}$decoderVersion"
         val target = File(directory, "$key.png")
         if ((!target.exists() || target.length() == 0L) && !extract(context, document, target)) {
@@ -48,19 +53,74 @@ object LocalArtworkPreview {
                 ?: throw IOException("Cannot open ${document.name}")
             input.use { source -> staged.outputStream().buffered().use { source.copyTo(it) } }
 
-            if (document.name.orEmpty().endsWith(".clip", true) && extractClipZipPreview(staged, target)) {
-                return true
-            }
-            if (document.name.orEmpty().endsWith(".psd", true) && extractPsdThumbnail(staged, target)) {
-                return true
-            }
-            if (document.name.orEmpty().endsWith(".psd", true) && extractPsdComposite(staged, target)) {
-                return true
-            }
-            return extractEmbeddedImage(staged, target)
+            return extractStaged(staged, document.name.orEmpty(), target)
         } finally {
             staged.delete()
         }
+    }
+
+    suspend fun readerPage(context: Context, url: String, headers: Map<String, String>): String {
+        val extension = Uri.parse(url).lastPathSegment.orEmpty().substringAfterLast('.', "").lowercase()
+        if (extension !in PHOTOSHOP_EXTENSIONS) {
+            throw IOException("Unsupported online artwork format: $extension")
+        }
+        val directory = File(context.cacheDir, "local-artwork").apply {
+            if (!exists() && !mkdirs()) throw IOException("Could not create the local artwork preview folder")
+        }
+        val cacheKey = "${url.hashCode()}_${headers.toSortedMap().hashCode()}_photoshop2"
+        val target = File(directory, "remote_$cacheKey.png")
+        if (!target.exists() || target.length() == 0L) {
+            val staged = File.createTempFile("remote-artwork-", ".$extension", directory)
+            try {
+                val request = okhttp3.Request.Builder().url(url).apply {
+                    headers.forEach { (name, value) -> header(name, value) }
+                }.build()
+                try {
+                    context.app.network.client.await(request).use { response ->
+                        if (!response.isSuccessful) {
+                            throw IOException("Could not load online artwork (HTTP ${response.code})")
+                        }
+                        val body = response.body ?: throw IOException("Online artwork response was empty")
+                        if (body.contentLength() > MAX_REMOTE_ARTWORK_BYTES) {
+                            throw IOException("Online artwork exceeds the supported download size")
+                        }
+                        body.byteStream().use { input ->
+                            staged.outputStream().buffered().use { output ->
+                                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                                var total = 0L
+                                while (true) {
+                                    val count = input.read(buffer)
+                                    if (count < 0) break
+                                    total += count
+                                    if (total > MAX_REMOTE_ARTWORK_BYTES) {
+                                        throw IOException("Online artwork exceeds the supported download size")
+                                    }
+                                    output.write(buffer, 0, count)
+                                }
+                            }
+                        }
+                    }
+                    if (!extractStaged(staged, extension, target)) {
+                        throw IOException("Could not decode online $extension artwork")
+                    }
+                } catch (e: Exception) {
+                    target.delete()
+                    throw e
+                }
+            } finally {
+                staged.delete()
+            }
+        }
+        return Uri.fromFile(target).toString()
+    }
+
+    private fun extractStaged(staged: File, name: String, target: File): Boolean {
+        if (name.endsWith(".clip", true) && extractClipZipPreview(staged, target)) return true
+        if (name.endsWith(".psd", true) && extractPsdThumbnail(staged, target)) return true
+        if (name.endsWith(".psd", true) || name.endsWith(".psb", true)) {
+            if (extractPsdComposite(staged, target)) return true
+        }
+        return extractEmbeddedImage(staged, target)
     }
 
     private fun extractClipZipPreview(file: File, target: File): Boolean {
@@ -112,7 +172,7 @@ object LocalArtworkPreview {
 
     private fun extractPsdThumbnail(file: File, target: File): Boolean {
         RandomAccessFile(file, "r").use { input ->
-            if (input.length() < 30) return false
+            if (input.length() < PSD_HEADER_SIZE) return false
             val signature = ByteArray(4)
             input.readFully(signature)
             if (String(signature, Charsets.US_ASCII) != "8BPS") return false
@@ -167,9 +227,10 @@ object LocalArtworkPreview {
                 if (input.length() < PSD_HEADER_SIZE) return false
                 val signature = ByteArray(4)
                 input.readFully(signature)
-                if (String(signature, Charsets.US_ASCII) != "8BPS" ||
-                    input.readUnsignedShort() != PSD_VERSION
-                ) return false
+                if (String(signature, Charsets.US_ASCII) != "8BPS") return false
+                val version = input.readUnsignedShort()
+                if (version !in PSD_VERSION..PSB_VERSION) return false
+                val largeDocument = version == PSB_VERSION
                 input.skipBytes(6)
 
                 val channelCount = input.readUnsignedShort()
@@ -177,8 +238,9 @@ object LocalArtworkPreview {
                 val width = readUInt32(input)
                 val depth = input.readUnsignedShort()
                 val colorMode = input.readUnsignedShort()
-                if (width !in 1L..MAX_PSD_DIMENSION.toLong() ||
-                    height !in 1L..MAX_PSD_DIMENSION.toLong() ||
+                val maxDimension = if (largeDocument) MAX_PSB_DIMENSION else MAX_PSD_DIMENSION
+                if (width !in 1L..maxDimension.toLong() ||
+                    height !in 1L..maxDimension.toLong() ||
                     channelCount !in 1..MAX_PSD_CHANNELS || depth !in setOf(8, 16) ||
                     (colorMode == PSD_INDEXED && depth != 8) ||
                     colorMode !in setOf(PSD_RGB, PSD_GRAYSCALE, PSD_INDEXED)
@@ -195,7 +257,7 @@ object LocalArtworkPreview {
                 }
                 if (channelCount < baseChannels) return false
 
-                val colorDataLength = readUInt32(input)
+                val colorDataLength = readSectionLength(input, largeDocument)
                 if (!sectionFits(input, colorDataLength)) return false
                 val colorDataStart = input.filePointer
                 val palette = if (colorMode == PSD_INDEXED && colorDataLength >= PSD_PALETTE_SIZE) {
@@ -204,10 +266,10 @@ object LocalArtworkPreview {
                     null
                 }
                 input.seek(colorDataStart + colorDataLength)
-                val resourcesLength = readUInt32(input)
+                val resourcesLength = readSectionLength(input, largeDocument)
                 if (!sectionFits(input, resourcesLength)) return false
                 input.seek(input.filePointer + resourcesLength)
-                val layerMaskLength = readUInt32(input)
+                val layerMaskLength = readSectionLength(input, largeDocument)
                 if (!sectionFits(input, layerMaskLength)) return false
                 input.seek(input.filePointer + layerMaskLength)
 
@@ -229,7 +291,13 @@ object LocalArtworkPreview {
                     val count = channelCount.toLong() * height
                     if (count > Int.MAX_VALUE) return false
                     IntArray(count.toInt()) {
-                        input.readUnsignedShort()
+                        val length = if (largeDocument) {
+                            input.readInt().toLong() and 0xffffffffL
+                        } else {
+                            input.readUnsignedShort().toLong()
+                        }
+                        if (length > Int.MAX_VALUE) return false
+                        length.toInt()
                     }.also { lengths ->
                         if (lengths.any { it > rowByteCount * 2 + 16 }) return false
                     }
@@ -337,6 +405,13 @@ object LocalArtworkPreview {
 
     private fun sectionFits(input: RandomAccessFile, length: Long): Boolean =
         length <= input.length() - input.filePointer
+
+    private fun readSectionLength(input: RandomAccessFile, largeDocument: Boolean): Long =
+        if (largeDocument) input.readLong().also {
+            if (it < 0L) throw IOException("Invalid large Photoshop section length")
+        } else {
+            readUInt32(input)
+        }
 
     private fun psdSampleSize(width: Int, height: Int): Int {
         var sample = sampleSize(width, height)
@@ -520,6 +595,7 @@ object LocalArtworkPreview {
     private const val MAX_CLIP_CANDIDATES = 64
     private const val PSD_HEADER_SIZE = 30L
     private const val PSD_VERSION = 1
+    private const val PSB_VERSION = 2
     private const val PSD_RGB = 3
     private const val PSD_INDEXED = 2
     private const val PSD_GRAYSCALE = 1
@@ -529,9 +605,12 @@ object LocalArtworkPreview {
     private const val PSD_ZIP_PREDICTION = 3
     private const val PSD_PALETTE_SIZE = 768L
     private const val MAX_PSD_DIMENSION = 30000
+    private const val MAX_PSB_DIMENSION = 300000
     private const val MAX_PSD_CHANNELS = 8
     private const val MAX_PSD_PREVIEW_PIXELS = 3_000_000L
     private const val MAX_PSD_COMPOSITE_BYTES = 512L * 1024L * 1024L
+    private const val MAX_REMOTE_ARTWORK_BYTES = 1024L * 1024L * 1024L
+    private val PHOTOSHOP_EXTENSIONS = setOf("psd", "psb")
     private const val JPEG_THUMBNAIL_FORMAT = 1L
     private val THUMBNAIL_RESOURCE_IDS = setOf(1033, 1036)
     private val PREVIEW_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")

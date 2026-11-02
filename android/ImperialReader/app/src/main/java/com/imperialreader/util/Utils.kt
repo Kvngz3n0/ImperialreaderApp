@@ -22,8 +22,10 @@ fun isImageName(name: String?): Boolean {
     return ext in IMAGE_EXTENSIONS
 }
 
-fun isReaderPageName(name: String?): Boolean =
-    isImageName(name) || name?.substringAfterLast('.', "")?.equals("mp4", ignoreCase = true) == true
+fun isReaderPageName(name: String?): Boolean {
+    val extension = name?.substringAfterLast('.', "")?.lowercase() ?: return false
+    return extension in IMAGE_EXTENSIONS || extension == "mp4" || extension == "psd" || extension == "psb"
+}
 
 fun mimeForExt(ext: String): String = when (ext.lowercase()) {
     "jpg", "jpeg" -> "image/jpeg"

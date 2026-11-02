@@ -413,6 +413,7 @@ class DownloadManager(private val ctx: Context) {
                     val ext = if (scrambleOffset != null) "jpg" else when {
                         ct.substringBefore(';').trim().equals("video/mp4", ignoreCase = true) ||
                             urlExtension == "mp4" -> "mp4"
+                        urlExtension == "psd" || urlExtension == "psb" -> urlExtension
                         "png" in ct -> "png"
                         "webp" in ct -> "webp"
                         "gif" in ct -> "gif"

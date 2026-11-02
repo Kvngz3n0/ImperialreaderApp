@@ -42,7 +42,14 @@ object ChapterLoader {
             if (chapter.downloaded) {
                 val files = ctx.app.storage.downloadedPages(manga, chapter)
                 if (files.isNotEmpty()) {
-                    return@withContext LoadedChapter.Images(files.map { it.uri.toString() }, emptyMap())
+                    val pages = files.map { file ->
+                        if (LocalArtworkPreview.supports(file.name)) {
+                            LocalArtworkPreview.readerPage(ctx, file)
+                        } else {
+                            file.uri.toString()
+                        }
+                    }
+                    return@withContext LoadedChapter.Images(pages, emptyMap())
                 }
             }
             val source = ctx.app.sources.get(manga.source)
@@ -52,7 +59,15 @@ object ChapterLoader {
                 SChapter(url = chapter.url, name = chapter.name)
             )
             if (loaded.urls.isEmpty()) throw IOException("The source returned no pages for this chapter")
-            LoadedChapter.Images(loaded.urls, loaded.headers)
+            val pages = loaded.urls.map { url ->
+                val extension = Uri.parse(url).lastPathSegment.orEmpty().substringAfterLast('.', "")
+                if (url.startsWith("http", ignoreCase = true) && LocalArtworkPreview.supports(extension)) {
+                    LocalArtworkPreview.readerPage(ctx, url, loaded.headers)
+                } else {
+                    url
+                }
+            }
+            LoadedChapter.Images(pages, loaded.headers)
         }
 
     private fun loadLocal(ctx: Context, manga: MangaEntity, chapter: ChapterEntity): LoadedChapter {

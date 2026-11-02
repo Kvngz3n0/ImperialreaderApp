@@ -26,7 +26,7 @@ For manga and comics, tap the reader to show controls. Choose left-to-right, rig
 ### Read your own files
 
 1. In **More → Storage folder**, choose a folder and grant access. Imperial Reader creates `local/`, `downloads/`, and `autobackup/` inside it.
-2. Put local files under `local/<Title>/`. Each archive, PDF, EPUB, PSD, CLIP, or image subfolder is treated as a chapter. PSD and CLIP files use an embedded flattened preview when available; layered editing is not supported.
+2. Put local files under `local/<Title>/`. Each archive, PDF, EPUB, PSD, PSB, CLIP, or image subfolder is treated as a chapter. PSD, PSB, and CLIP files use an embedded flattened preview when available; layered editing is not supported.
 3. Choose **More → Scan local library** to import or refresh your local titles.
 
 PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs and PDFs, or browse supported web-novel catalogs including NovelArrow. Downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
@@ -63,7 +63,8 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Local files and backups
 
-- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, and CLIP files as library titles. PSD and CLIP reading uses embedded previews when available.
+- Read online PSD and PSB chapter pages by converting their flattened composite previews to cached images, including downloaded pages.
+- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, PSB, and CLIP files as library titles. PSD, PSB, and CLIP reading uses embedded previews when available.
 - Read local titles from the library and refresh the scan when files change.
 - Choose where downloads and local files are stored; without a selected folder, the app uses private app storage.
 - Export or restore a JSON backup containing library titles, categories, chapter read/bookmark/progress state, and history. Restore merges with the current library rather than deleting it.

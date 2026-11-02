@@ -25,7 +25,7 @@ class LocalScanner(private val ctx: Context) {
             val n = name?.lowercase() ?: return false
             return n.endsWith(".cbz") || n.endsWith(".zip") || n.endsWith(".epub") ||
                 n.endsWith(".cbr") || n.endsWith(".rar") || n.endsWith(".pdf") ||
-                n.endsWith(".psd") || n.endsWith(".clip")
+                n.endsWith(".psd") || n.endsWith(".psb") || n.endsWith(".clip")
         }
     }
 
@@ -55,7 +55,7 @@ class LocalScanner(private val ctx: Context) {
             }
 
             val coverDoc = children.firstOrNull {
-                !it.isDirectory && it.name?.matches(Regex("(?i)cover\\.(jpe?g|png|webp|psd|clip)")) == true
+                !it.isDirectory && it.name?.matches(Regex("(?i)cover\\.(jpe?g|png|webp|psd|psb|clip)")) == true
             }
             val cover = resolveCover(folderName, coverDoc, chapterDocs.first())
 
