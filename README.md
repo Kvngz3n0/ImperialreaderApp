@@ -49,6 +49,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 - Select multiple titles to move them between categories or remove them from the library.
 - See unread, downloaded/local, and new-chapter counts, with display options in Settings. The **Updates** tab badge shows unseen chapter updates and clears when you open the tab; updates remain listed and are dimmed until new chapters arrive.
 - Set a custom cover for a title from its details screen. Tap the cover in the details header to view it full-screen and save it to Pictures.
+- The details/chapter list temporarily samples accent colors from the title cover and returns to the app theme when closed.
 - Refresh a title's chapter list or update the library for new chapters.
 
 ### Read, track, and download
@@ -62,10 +63,9 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Local files and backups
 
-- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, and CLIP files as library titles. PSD and CLIP reading uses embedded flattened previews when available.
+- Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, and CLIP files as library titles. PSD and CLIP reading uses embedded previews when available.
 - Read local titles from the library and refresh the scan when files change.
 - Choose where downloads and local files are stored; without a selected folder, the app uses private app storage.
-- Add a round profile picture from **More**. Pictures are copied into app storage; tapping the avatar asks before opening the image picker.
 - Export or restore a JSON backup containing library titles, categories, chapter read/bookmark/progress state, and history. Restore merges with the current library rather than deleting it.
 - Create automatic backups manually or let the app run them periodically; it keeps a rolling set of the five most recent automatic backups.
 

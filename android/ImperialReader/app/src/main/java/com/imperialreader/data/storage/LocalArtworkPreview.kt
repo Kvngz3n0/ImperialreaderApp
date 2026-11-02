@@ -11,6 +11,7 @@ import java.io.FileInputStream
 import java.io.IOException
 import java.io.RandomAccessFile
 import java.util.zip.ZipException
+import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 
 object LocalArtworkPreview {
@@ -58,12 +59,16 @@ object LocalArtworkPreview {
     private fun extractClipZipPreview(file: File, target: File): Boolean {
         return try {
             ZipFile(file).use { zip ->
-                val imageEntries = zip.entries().asSequence()
-                    .filter { !it.isDirectory && isClipImageEntry(it.name) }
+                val candidates = zip.entries().asSequence()
+                    .filter { !it.isDirectory && it.size in 1..MAX_CLIP_ENTRY_BYTES }
+                    .filter { isClipImageEntry(it.name) || hasPreviewMarker(it.name) }
+                    .sortedWith(
+                        compareBy<ZipEntry> { clipPreviewPriority(it.name) }
+                            .thenBy { if (isClipImageEntry(it.name)) 0 else 1 }
+                            .thenByDescending { it.size }
+                    )
+                    .take(MAX_CLIP_CANDIDATES)
                     .toList()
-                val previews = imageEntries.filter { isClipPreviewEntry(it.name) }
-                    .sortedBy { clipPreviewPriority(it.name) }
-                val candidates = previews.ifEmpty { imageEntries.sortedByDescending { it.size } }
                 for (entry in candidates) {
                     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     zip.getInputStream(entry).use { BitmapFactory.decodeStream(it, null, bounds) }
@@ -83,14 +88,14 @@ object LocalArtworkPreview {
         }
     }
 
-    private fun isClipPreviewEntry(path: String): Boolean {
-        val name = path.substringAfterLast('/').lowercase()
-        return isClipImageEntry(path) && PREVIEW_MARKERS.any(name::contains)
-    }
-
     private fun isClipImageEntry(path: String): Boolean {
         val extension = path.substringAfterLast('/').substringAfterLast('.', "").lowercase()
         return extension in PREVIEW_EXTENSIONS
+    }
+
+    private fun hasPreviewMarker(path: String): Boolean {
+        val name = path.substringAfterLast('/').lowercase()
+        return PREVIEW_MARKERS.any(name::contains)
     }
 
     private fun clipPreviewPriority(path: String): Int {
@@ -178,7 +183,8 @@ object LocalArtworkPreview {
                 val base = consumed - carry
                 for (index in 0..(total - 3).coerceAtLeast(-1)) {
                     if (matchesPng(buffer, index, total) || matchesJpeg(buffer, index, total) ||
-                        matchesWebp(buffer, index, total)
+                        matchesWebp(buffer, index, total) || matchesGif(buffer, index, total) ||
+                        matchesBmp(buffer, index, total)
                     ) {
                         found += base + index
                         if (found.size >= MAX_IMAGE_CANDIDATES) break
@@ -208,6 +214,15 @@ object LocalArtworkPreview {
         offset + 12 <= limit &&
             String(data, offset, 4, Charsets.US_ASCII) == "RIFF" &&
             String(data, offset + 8, 4, Charsets.US_ASCII) == "WEBP"
+
+    private fun matchesGif(data: ByteArray, offset: Int, limit: Int): Boolean =
+        offset + 6 <= limit &&
+            (String(data, offset, 6, Charsets.US_ASCII) == "GIF87a" ||
+                String(data, offset, 6, Charsets.US_ASCII) == "GIF89a")
+
+    private fun matchesBmp(data: ByteArray, offset: Int, limit: Int): Boolean =
+        offset + 2 <= limit &&
+            data[offset] == 'B'.code.toByte() && data[offset + 1] == 'M'.code.toByte()
 
     private fun decodeBounds(file: File, offset: Long): BitmapFactory.Options? =
         BitmapFactory.Options().apply {
@@ -263,8 +278,12 @@ object LocalArtworkPreview {
     private const val MAX_PREVIEW_DIMENSION = 2400
     private const val THUMBNAIL_HEADER_SIZE = 28L
     private const val MAX_THUMBNAIL_BYTES = 64L * 1024L * 1024L
+    private const val MAX_CLIP_ENTRY_BYTES = 128L * 1024L * 1024L
+    private const val MAX_CLIP_CANDIDATES = 64
     private const val JPEG_THUMBNAIL_FORMAT = 1L
     private val THUMBNAIL_RESOURCE_IDS = setOf(1033, 1036)
     private val PREVIEW_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
-    private val PREVIEW_MARKERS = listOf("mergedimage", "merged_image", "preview", "thumbnail", "canvas")
+    private val PREVIEW_MARKERS = listOf(
+        "mergedimage", "merged_image", "preview", "thumbnail", "canvas", "clipstudio", "clip_studio"
+    )
 }

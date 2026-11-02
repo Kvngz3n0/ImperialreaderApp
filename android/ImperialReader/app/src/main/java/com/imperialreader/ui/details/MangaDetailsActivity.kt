@@ -5,8 +5,12 @@ import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
@@ -26,6 +30,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.core.graphics.drawable.toBitmap
 import androidx.recyclerview.widget.ConcatAdapter
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -92,6 +97,9 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
     }
 
     private var mangaId = -1L
+    private var originalStatusBarColor: Int = Color.BLACK
+    private var originalNavigationBarColor: Int = Color.BLACK
+    private var entryTheme = EntryTheme.DEFAULT
     private var manga: MangaEntity? = null
     private var rows: List<ChapterRow> = emptyList()
     private val reversed = MutableStateFlow(false)
@@ -137,6 +145,8 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        originalStatusBarColor = window.statusBarColor
+        originalNavigationBarColor = window.navigationBarColor
         setContentView(R.layout.activity_manga_details)
         mangaId = intent.getLongExtra(EXTRA_ID, -1L)
         if (mangaId < 0) {
@@ -232,6 +242,93 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         lifecycleScope.launch {
             val m = app.db.mangaDao().getById(mangaId)
             if (m != null && !m.initialized && !m.favorite) refresh(m)
+        }
+    }
+
+    override fun onDestroy() {
+        window.statusBarColor = originalStatusBarColor
+        window.navigationBarColor = originalNavigationBarColor
+        super.onDestroy()
+    }
+
+    private fun onEntryCoverLoaded(drawable: Drawable) {
+        val bitmap = drawable.toBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val colors = HashMap<Int, Int>()
+        val pixel = IntArray(1)
+        for (y in 0 until bitmap.height step 2) {
+            for (x in 0 until bitmap.width step 2) {
+                bitmap.getPixels(pixel, 0, 1, x, y, 1, 1)
+                val color = pixel[0]
+                val hsv = FloatArray(3)
+                Color.colorToHSV(color, hsv)
+                if (hsv[1] < 0.22f || hsv[2] < 0.2f || hsv[2] > 0.96f) continue
+                val quantized = Color.rgb(
+                    (Color.red(color) shr 4) * 17,
+                    (Color.green(color) shr 4) * 17,
+                    (Color.blue(color) shr 4) * 17
+                )
+                colors[quantized] = (colors[quantized] ?: 0) + 1
+            }
+        }
+        if (drawable !is BitmapDrawable || bitmap !== drawable.bitmap) bitmap.recycle()
+        val ranked = colors.entries.sortedByDescending { it.value }.map { it.key }
+        val primary = ranked.firstOrNull() ?: getColor(R.color.gold)
+        val primaryHue = FloatArray(3).also { Color.colorToHSV(primary, it) }[0]
+        val secondary = ranked.firstOrNull { candidate ->
+            val hue = FloatArray(3).also { Color.colorToHSV(candidate, it) }[0]
+            val difference = kotlin.math.abs(primaryHue - hue)
+            minOf(difference, 360f - difference) >= 18f
+        } ?: Color.HSVToColor(
+            floatArrayOf((primaryHue + 34f) % 360f, 0.62f, 0.84f)
+        )
+        val nextTheme = EntryTheme(
+            primary = accentColor(primary),
+            secondary = accentColor(secondary),
+            surface = tintedSurface(primaryHue, 0.15f),
+            background = tintedSurface(primaryHue, 0.08f)
+        )
+        if (nextTheme == entryTheme) return
+        entryTheme = nextTheme
+
+        findViewById<View>(R.id.detailsRoot).setBackgroundColor(entryTheme.background)
+        toolbar.setBackgroundColor(entryTheme.surface)
+        toolbar.setTitleTextColor(Color.WHITE)
+        toolbar.setNavigationIconTint(entryTheme.primary)
+        toolbar.overflowIcon?.setTint(entryTheme.primary)
+        swipe.setColorSchemeColors(entryTheme.primary, entryTheme.secondary)
+        fab.backgroundTintList = ColorStateList.valueOf(entryTheme.primary)
+        fab.setTextColor(contrastColor(entryTheme.primary))
+        window.statusBarColor = entryTheme.background
+        window.navigationBarColor = entryTheme.background
+        headerAdapter.refreshColors()
+        chapterAdapter.refreshColors()
+    }
+
+    private fun accentColor(color: Int): Int {
+        val hsv = FloatArray(3)
+        Color.colorToHSV(color, hsv)
+        hsv[1] = hsv[1].coerceAtLeast(0.58f)
+        hsv[2] = 0.86f
+        return Color.HSVToColor(hsv)
+    }
+
+    private fun tintedSurface(hue: Float, value: Float): Int =
+        Color.HSVToColor(floatArrayOf(hue, 0.28f, value))
+
+    private fun contrastColor(background: Int): Int {
+        val luminance = (0.299 * Color.red(background) +
+            0.587 * Color.green(background) + 0.114 * Color.blue(background)) / 255
+        return if (luminance > 0.62) Color.BLACK else Color.WHITE
+    }
+
+    private data class EntryTheme(
+        val primary: Int,
+        val secondary: Int,
+        val surface: Int,
+        val background: Int
+    ) {
+        companion object {
+            val DEFAULT = EntryTheme(Color.TRANSPARENT, Color.TRANSPARENT, Color.TRANSPARENT, Color.TRANSPARENT)
         }
     }
 
@@ -860,7 +957,11 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         override fun onBindViewHolder(h: VH, position: Int) {
             val manga = m ?: return
             val source = app.sources.get(manga.source)
-            h.cover.loadCover(manga.displayCoverUrl, source?.imageHeaders().orEmpty())
+            h.cover.loadCover(
+                manga.displayCoverUrl,
+                source?.imageHeaders().orEmpty(),
+                ::onEntryCoverLoaded
+            )
             h.cover.setOnClickListener {
                 manga.displayCoverUrl?.let { url -> showCoverViewer(url, source?.imageHeaders().orEmpty()) }
             }
@@ -895,7 +996,21 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             h.genres.text = manga.genre.orEmpty()
             h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
             h.chapters.text = "$count chapters"
+            h.title.setTextColor(Color.WHITE)
+            h.author.setTextColor(getColor(R.color.on_surface_variant))
+            h.status.setTextColor(getColor(R.color.on_surface_variant))
+            h.desc.setTextColor(Color.WHITE)
+            h.genres.setTextColor(entryTheme.secondary.takeIf { it != Color.TRANSPARENT }
+                ?: getColor(R.color.gold_light))
+            h.chapters.setTextColor(entryTheme.primary.takeIf { it != Color.TRANSPARENT }
+                ?: getColor(R.color.on_surface))
+            h.btnLibrary.backgroundTintList =
+                ColorStateList.valueOf(entryTheme.primary.takeIf { it != Color.TRANSPARENT } ?: getColor(R.color.gold))
+            h.btnWeb.backgroundTintList =
+                ColorStateList.valueOf(entryTheme.secondary.takeIf { it != Color.TRANSPARENT } ?: getColor(R.color.gold))
         }
+
+        fun refreshColors() = notifyItemChanged(0)
     }
 
     private fun showCoverViewer(url: String, headers: Map<String, String>) {
@@ -990,6 +1105,7 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             val c = row.chapter
             h.title.text = (if (c.bookmark) "★ " else "") + c.name
             h.title.alpha = if (c.read) 0.5f else 1f
+            h.title.setTextColor(Color.WHITE)
             h.selectionMark.visibility = if (row.selected) View.VISIBLE else View.GONE
             h.sub.text = listOfNotNull(
                 relativeTime(c.dateUpload).takeIf { it.isNotBlank() },
@@ -997,6 +1113,16 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
                 if (!c.read && c.lastPageRead > 0) "Page ${c.lastPageRead + 1}" else null
             ).joinToString(" • ")
             h.sub.alpha = if (c.read) 0.5f else 1f
+            h.sub.setTextColor(getColor(R.color.on_surface_variant))
+            h.options.setTextColor(
+                entryTheme.secondary.takeIf { it != Color.TRANSPARENT } ?: getColor(R.color.on_surface_variant)
+            )
+            h.icon.setColorFilter(
+                entryTheme.primary.takeIf { it != Color.TRANSPARENT } ?: getColor(R.color.gold)
+            )
+            h.progress.setIndicatorColor(
+                entryTheme.primary.takeIf { it != Color.TRANSPARENT } ?: getColor(R.color.gold)
+            )
 
             if (row.progress != null) {
                 h.progress.visibility = View.VISIBLE
@@ -1014,6 +1140,8 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             h.itemView.setOnClickListener { onClick(row) }
             h.itemView.setOnLongClickListener { onLong(row, h.itemView); true }
         }
+
+        fun refreshColors() = notifyDataSetChanged()
     }
 
     private object Diff : DiffUtil.ItemCallback<ChapterRow>() {

@@ -14,6 +14,7 @@ class AppPrefs(context: Context) {
             .remove("app_theme")
             .remove("pixel_style")
             .remove("ui_accent")
+            .remove("profile_picture_uri")
             .apply()
         val migratedInterval = when (sp.getString("automatic_cover_refresh_interval", null)) {
             "6" -> "360"
@@ -108,10 +109,6 @@ class AppPrefs(context: Context) {
     var storageUri: String?
         get() = sp.getString("storage_uri", null)
         set(v) = sp.edit { putString("storage_uri", v) }
-
-    var profilePictureUri: String?
-        get() = sp.getString("profile_picture_uri", null)
-        set(value) = sp.edit { putString("profile_picture_uri", value) }
 
     var automaticBackupAt: Long
         get() = sp.getLong("automatic_backup_at", 0L)

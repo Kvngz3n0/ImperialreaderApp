@@ -50,6 +50,14 @@ class App : Application(), ImageLoaderFactory {
             } catch (e: Exception) {
                 Log.e("App", "Could not schedule automatic backups", e)
             }
+            try {
+                val oldProfilePictures = java.io.File(filesDir, "profile-pictures")
+                if (oldProfilePictures.exists() && !oldProfilePictures.deleteRecursively()) {
+                    Log.w("App", "Could not remove old profile picture files")
+                }
+            } catch (e: Exception) {
+                Log.e("App", "Could not remove old profile picture files", e)
+            }
         }
     }
 

@@ -4,7 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.TextView
@@ -16,11 +15,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import coil.load
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
-import com.google.android.material.imageview.ShapeableImageView
 import com.google.android.material.materialswitch.MaterialSwitch
-import com.google.android.material.shape.ShapeAppearanceModel
 import com.imperialreader.R
 import com.imperialreader.data.backup.BackupManager
 import com.imperialreader.data.storage.LocalScanner
@@ -29,21 +25,13 @@ import com.imperialreader.ui.details.MangaDetailsActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.io.File
-import java.io.IOException
 import java.util.Date
 import java.util.Locale
 
 class MoreFragment : Fragment(R.layout.fragment_more) {
-
-    private companion object {
-        const val MAX_PROFILE_PICTURE_BYTES = 25L * 1024L * 1024L
-    }
-
     private lateinit var storageSub: TextView
     private lateinit var scanSub: TextView
     private lateinit var autoBackupSub: TextView
@@ -52,7 +40,6 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     private lateinit var queueEmpty: TextView
     private lateinit var queueRecycler: RecyclerView
     private lateinit var queueAdapter: DownloadQueueAdapter
-    private lateinit var profileAvatar: ShapeableImageView
     private lateinit var appUpdateSub: TextView
     private var queueItems: List<com.imperialreader.data.download.DownloadQueueItem> = emptyList()
     private var pendingUpdateApk: File? = null
@@ -67,32 +54,6 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
             requireContext().toast("Allow Imperial Reader to install apps, then check for updates again")
         }
     }
-
-    private val chooseProfilePicture =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) {
-                val context = requireContext()
-                lifecycleScope.launch {
-                    try {
-                        val savedUri = withContext(Dispatchers.IO) {
-                            copyProfilePicture(context, uri)
-                        }
-                        val previousUri = context.app.prefs.profilePictureUri?.let(Uri::parse)
-                        context.app.prefs.profilePictureUri = savedUri.toString()
-                        if (::profileAvatar.isInitialized && profileAvatar.isAttachedToWindow) {
-                            showProfilePicture(savedUri)
-                        }
-                        withContext(Dispatchers.IO) {
-                            removePreviousProfileCopy(context, previousUri, savedUri)
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        context.toast("Couldn't save profile picture: ${e.message}")
-                    }
-                }
-            }
-        }
 
     private val createBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) {
@@ -168,18 +129,6 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
             }
         }
         refreshAutomaticBackupText()
-        profileAvatar = view.findViewById(R.id.profileAvatar)
-        profileAvatar.shapeAppearanceModel =
-            ShapeAppearanceModel.builder().setAllCornerSizes(1_000f).build()
-        profileAvatar.strokeColor = android.content.res.ColorStateList.valueOf(
-            requireContext().getColor(R.color.gold)
-        )
-        profileAvatar.strokeWidth = 2f * resources.displayMetrics.density
-        profileAvatar.setOnClickListener { confirmProfilePictureChange() }
-        view.findViewById<View>(R.id.rowProfile)
-            .setOnClickListener { confirmProfilePictureChange() }
-        prefs.profilePictureUri?.let { showProfilePicture(Uri.parse(it)) }
-
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 requireContext().app.downloads.queueItems.collect { items ->
@@ -322,85 +271,6 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     private fun refreshStorageText() {
         storageSub.text = requireContext().app.storage.displayPath()
         refreshAutomaticBackupText()
-    }
-
-    private fun showProfilePicture(uri: Uri) {
-        profileAvatar.load(uri) {
-            placeholder(R.drawable.ic_profile)
-            error(R.drawable.ic_profile)
-            listener(
-                onError = { _, _ ->
-                    if (profileAvatar.isAttachedToWindow) {
-                        requireContext().toast("Profile picture couldn't be loaded. Tap to choose another.")
-                    }
-                }
-            )
-        }
-    }
-
-    private fun confirmProfilePictureChange() {
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle("Change profile picture?")
-            .setMessage("Your current profile picture will stay until you choose a new one.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Choose picture") { _, _ ->
-                chooseProfilePicture.launch(arrayOf("image/*"))
-            }
-            .show()
-    }
-
-    private fun copyProfilePicture(context: android.content.Context, uri: Uri): Uri {
-        val mimeType = context.contentResolver.getType(uri)
-        if (mimeType != null && !mimeType.startsWith("image/")) {
-            throw IOException("The selected file is not an image")
-        }
-        val directory = File(context.filesDir, "profile-pictures")
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw IOException("Could not create the profile picture folder")
-        }
-        val target = File.createTempFile("profile-", ".img", directory)
-        try {
-            val input = context.contentResolver.openInputStream(uri)
-                ?: throw IOException("Could not open the selected image")
-            input.use { source ->
-                target.outputStream().buffered().use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var total = 0L
-                    while (true) {
-                        val count = source.read(buffer)
-                        if (count < 0) break
-                        total += count
-                        if (total > MAX_PROFILE_PICTURE_BYTES) {
-                            throw IOException("Selected image is larger than 25 MB")
-                        }
-                        output.write(buffer, 0, count)
-                    }
-                    if (total == 0L) throw IOException("Selected image is empty")
-                }
-            }
-            return Uri.fromFile(target)
-        } catch (e: Exception) {
-            target.delete()
-            throw e
-        }
-    }
-
-    private fun removePreviousProfileCopy(context: android.content.Context, previous: Uri?, current: Uri) {
-        val oldPath = previous?.takeIf { it.scheme == "file" }?.path ?: return
-        val currentPath = current.path ?: return
-        try {
-            val directory = File(context.filesDir, "profile-pictures").canonicalFile
-            val oldFile = File(oldPath).canonicalFile
-            if (oldFile.path != currentPath && oldFile.parentFile == directory &&
-                oldFile.exists() && !oldFile.delete()
-            ) {
-                Log.w("MoreFragment", "Could not remove the previous profile picture")
-            }
-        } catch (e: IOException) {
-            Log.w("MoreFragment", "Could not clean up the previous profile picture", e)
-        } catch (e: SecurityException) {
-            Log.w("MoreFragment", "Could not access the previous profile picture", e)
-        }
     }
 
     override fun onResume() {

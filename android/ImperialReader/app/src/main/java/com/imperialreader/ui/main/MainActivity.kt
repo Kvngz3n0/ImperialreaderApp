@@ -114,6 +114,16 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
         }
     }
 
+    override fun onPostResume() {
+        super.onPostResume()
+        val nav = findViewById<BottomNavigationView>(R.id.nav)
+        if (nav.selectedItemId == 0) {
+            nav.selectedItemId = R.id.nav_library
+        } else {
+            show(nav.selectedItemId)
+        }
+    }
+
     private fun markUpdatesSeen() {
         lifecycleScope.launch { app.db.chapterDao().markUpdatesSeen() }
     }
@@ -130,11 +140,13 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
     private fun show(id: Int) {
         val fm = supportFragmentManager
         val tag = id.toString()
+        val visibleFragments = fm.fragments.filterNot { it.isHidden }
+        if (visibleFragments.size == 1 && visibleFragments.single().tag == tag) return
         val tx = fm.beginTransaction()
         tx.setCustomAnimations(R.anim.fade_in, R.anim.fade_out)
         fm.fragments.forEach { tx.hide(it) }
         val existing = fm.findFragmentByTag(tag)
         if (existing == null) tx.add(R.id.container, create(id), tag) else tx.show(existing)
-        tx.commit()
+        if (!fm.isStateSaved) tx.commitNow()
     }
 }

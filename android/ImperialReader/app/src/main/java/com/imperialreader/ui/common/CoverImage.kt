@@ -1,12 +1,17 @@
 package com.imperialreader.ui.common
 
 import android.net.Uri
+import android.graphics.drawable.Drawable
 import android.widget.ImageView
 import coil.imageLoader
 import coil.load
 import com.imperialreader.App
 
-fun ImageView.loadCover(url: String?, headers: Map<String, String> = emptyMap()) {
+fun ImageView.loadCover(
+    url: String?,
+    headers: Map<String, String> = emptyMap(),
+    onLoaded: ((Drawable) -> Unit)? = null
+) {
     val imageLoader = if (url.isWitchToonsCover()) {
         App.instance.witchToonsCoverImageLoader
     } else {
@@ -14,6 +19,9 @@ fun ImageView.loadCover(url: String?, headers: Map<String, String> = emptyMap())
     }
     load(url, imageLoader) {
         headers.forEach { (key, value) -> addHeader(key, value) }
+        onLoaded?.let { callback ->
+            listener(onSuccess = { _, result -> callback(result.drawable) })
+        }
     }
 }
 
