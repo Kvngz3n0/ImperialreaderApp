@@ -65,6 +65,7 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     private lateinit var nextChapterStar: StarSpriteView
     private lateinit var nextChapterMessage: TextView
     private lateinit var gesture: GestureDetector
+    private var pageAdapter: PageAdapter? = null
 
     private var manga: MangaEntity? = null
     private var chapters: List<ChapterEntity> = emptyList() // oldest → newest
@@ -302,6 +303,8 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
             if (position == currentPage) pageZoomed = zoomed
         })
         adapter.pages = pages
+        adapter.setActivePage(start)
+        pageAdapter = adapter
 
         if (pagerMode) {
             webtoon.visibility = View.GONE
@@ -366,11 +369,13 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
 
     private fun onPageChanged(position: Int) {
         if (position < 0 || position >= pages.size) return
+        pageAdapter?.setActivePage(position)
         if (position != currentPage) {
             pageZoomed = false
             val adapter = if (pagerMode) pager.adapter as? PageAdapter else webtoon.adapter as? PageAdapter
             adapter?.resetZoom(currentPage)
         }
+
         currentPage = position
         updatePageUi(position)
         if (restoring) return
@@ -380,6 +385,16 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
         val read = ch.read || reachedEnd
         chapters = chapters.mapIndexed { i, c -> if (i == index) c.copy(lastPageRead = position, read = read) else c }
         lifecycleScope.launch { app.db.chapterDao().saveProgress(ch.id, position, read) }
+    }
+
+    override fun onPause() {
+        pageAdapter?.pausePawchiveVideo()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        pageAdapter?.resumePawchiveVideo()
     }
 
     private fun updateNextChapterPrompt() {

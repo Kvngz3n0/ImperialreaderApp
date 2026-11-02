@@ -198,6 +198,8 @@ class PageAdapter(
 ) : RecyclerView.Adapter<PageAdapter.VH>() {
 
     private val boundImages = mutableMapOf<Int, ZoomablePageImageView>()
+    private val boundHolders = mutableMapOf<Int, VH>()
+    private var activePage = 0
 
     var pages: List<String> = emptyList()
         set(value) {
@@ -255,7 +257,40 @@ class PageAdapter(
 
     override fun onBindViewHolder(h: VH, position: Int) {
         h.image.resetZoom()
+        boundHolders[position] = h
         load(h, position)
+    }
+
+    fun setActivePage(position: Int) {
+        if (position == activePage) return
+        val previous = activePage
+        activePage = position
+        if (previous in pages.indices && isPawchiveVideo(pages[previous])) {
+            boundHolders[previous]?.let { holder ->
+                holder.video.stopPlayback()
+                holder.video.visibility = View.GONE
+                holder.mediaController.hide()
+                holder.progress.visibility = View.GONE
+            }
+        }
+        listOf(previous, position)
+            .filter { it in pages.indices && isPawchiveVideo(pages[it]) }
+            .distinct()
+            .forEach(::notifyItemChanged)
+    }
+
+    fun pausePawchiveVideo() {
+        boundHolders[activePage]?.takeIf {
+            pages.getOrNull(activePage)?.let(::isPawchiveVideo) == true &&
+                it.video.visibility == View.VISIBLE
+        }?.video?.pause()
+    }
+
+    fun resumePawchiveVideo() {
+        boundHolders[activePage]?.takeIf {
+            pages.getOrNull(activePage)?.let(::isPawchiveVideo) == true &&
+                it.video.visibility == View.VISIBLE
+        }?.video?.start()
     }
 
     private fun load(h: VH, position: Int) {
@@ -264,15 +299,34 @@ class PageAdapter(
         boundImages[position] = h.image
         h.image.onZoomChanged = { zoomed -> onZoomChanged(position, zoomed) }
         h.error.visibility = View.GONE
+        if (isPawchiveVideo(url) && position != activePage) {
+            h.video.stopPlayback()
+            h.video.setOnPreparedListener(null)
+            h.video.setOnErrorListener(null)
+            h.mediaController.hide()
+            h.video.visibility = View.GONE
+            h.image.load(null)
+            h.image.visibility = View.GONE
+            h.image.setOnLongClickListener(null)
+            h.progress.visibility = View.GONE
+            return
+        }
         h.progress.visibility = View.VISIBLE
         if (isVideoPage(h.root.context, url)) {
             h.video.stopPlayback()
+            h.image.load(null)
             h.image.visibility = View.GONE
             h.image.setImageDrawable(null)
             h.image.setOnLongClickListener(null)
             h.video.visibility = View.VISIBLE
             h.video.setOnPreparedListener { player ->
                 if (h.bindingAdapterPosition != position) return@setOnPreparedListener
+                if (isPawchiveVideo(url) && position != activePage) {
+                    h.video.stopPlayback()
+                    h.video.visibility = View.GONE
+                    h.progress.visibility = View.GONE
+                    return@setOnPreparedListener
+                }
                 h.progress.visibility = View.GONE
                 h.root.minimumHeight = 0
                 player.isLooping = true
@@ -335,8 +389,17 @@ class PageAdapter(
                 ?.equals("video/mp4", ignoreCase = true) == true
     }
 
+    private fun isPawchiveVideo(url: String): Boolean {
+        val uri = Uri.parse(url)
+        val host = uri.host ?: return false
+        return (host.equals("pawchive.pw", ignoreCase = true) ||
+            host.endsWith(".pawchive.pw", ignoreCase = true)) &&
+            uri.lastPathSegment.orEmpty().substringBefore('?').endsWith(".mp4", ignoreCase = true)
+    }
+
     override fun onViewRecycled(holder: VH) {
         boundImages.entries.removeAll { it.value === holder.image }
+        boundHolders.entries.removeAll { it.value === holder }
         holder.image.resetZoom()
         holder.image.onZoomChanged = null
         holder.image.setImageDrawable(null)
