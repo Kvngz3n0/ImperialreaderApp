@@ -3,9 +3,13 @@ package com.imperialreader.ui.details
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.text.TextWatcher
+import android.text.Editable
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
@@ -14,6 +18,7 @@ import com.imperialreader.R
 import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.source.Source
 import com.imperialreader.ui.browse.GlobalSearchActivity
+import com.imperialreader.ui.common.loadCover
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.launch
@@ -34,6 +39,7 @@ class MigrationSourceSelectionActivity : androidx.appcompat.app.AppCompatActivit
     private lateinit var selectAll: MaterialCheckBox
     private lateinit var selectedCount: TextView
     private lateinit var sourceChecks: List<MaterialCheckBox>
+    private lateinit var noSourcesMatch: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,11 +89,61 @@ class MigrationSourceSelectionActivity : androidx.appcompat.app.AppCompatActivit
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
         )
+        val sourceContext = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(12))
+        }
+        sourceContext.addView(ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            loadCover(from.displayCoverUrl, app.sources.get(from.source)?.imageHeaders() ?: emptyMap())
+        }, LinearLayout.LayoutParams(dp(64), dp(88)))
+        sourceContext.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+            addView(TextView(this@MigrationSourceSelectionActivity).apply {
+                text = from.title
+                textSize = 16f
+                setTextColor(getColor(R.color.on_surface))
+            })
+            addView(TextView(this@MigrationSourceSelectionActivity).apply {
+                text = listOfNotNull(
+                    app.sources.get(from.source)?.name ?: from.source,
+                    from.author?.takeIf(String::isNotBlank)
+                ).joinToString(" • ")
+                textSize = 12f
+                setTextColor(getColor(R.color.on_surface_variant))
+                setPadding(0, dp(4), 0, dp(4))
+            })
+            from.description?.takeIf(String::isNotBlank)?.let { description ->
+                addView(TextView(this@MigrationSourceSelectionActivity).apply {
+                    text = description
+                    maxLines = 3
+                    textSize = 12f
+                    setTextColor(getColor(R.color.on_surface_variant))
+                })
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        root.addView(sourceContext)
         root.addView(TextView(this).apply {
-            text = "Choose sources to search for “${from.title}”."
+            text = "Choose destination sources to search"
             textSize = 14f
             setTextColor(getColor(R.color.on_surface_variant))
-            setPadding(dp(20), dp(8), dp(20), dp(4))
+            setPadding(dp(20), dp(4), dp(20), dp(4))
+        })
+
+        val sourceSearch = EditText(this).apply {
+            hint = "Search sources"
+            setSingleLine(true)
+            setPadding(dp(16), dp(4), dp(16), dp(4))
+            setTextColor(getColor(R.color.on_surface))
+            setHintTextColor(getColor(R.color.on_surface_variant))
+        }
+        root.addView(sourceSearch, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(dp(16), dp(4), dp(16), dp(4))
         })
 
         selectAll = MaterialCheckBox(this).apply {
@@ -127,6 +183,27 @@ class MigrationSourceSelectionActivity : androidx.appcompat.app.AppCompatActivit
                 }
             }.also(list::addView)
         }
+        noSourcesMatch = TextView(this).apply {
+            text = "No sources match that search"
+            textSize = 13f
+            setTextColor(getColor(R.color.on_surface_variant))
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            visibility = ViewGroup.GONE
+        }.also(list::addView)
+        sourceSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                val query = s?.toString()?.trim().orEmpty()
+                var matching = 0
+                sourceChecks.forEachIndexed { index, checkbox ->
+                    val visible = sources[index].name.contains(query, ignoreCase = true)
+                    checkbox.visibility = if (visible) ViewGroup.VISIBLE else ViewGroup.GONE
+                    if (visible) matching++
+                }
+                noSourcesMatch.visibility = if (matching == 0) ViewGroup.VISIBLE else ViewGroup.GONE
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
         val scroll = ScrollView(this).apply {
             isFillViewport = true
             addView(list)

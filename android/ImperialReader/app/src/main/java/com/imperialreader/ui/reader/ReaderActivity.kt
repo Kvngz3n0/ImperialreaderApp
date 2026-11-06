@@ -171,7 +171,7 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, velocityX: Float, velocityY: Float): Boolean {
                 if (e1 == null || pages.isEmpty() || pageZoomed) return false
-                val towardNext = e2.rawY < e1.rawY && !webtoon.canScrollVertically(1) && index < chapters.lastIndex
+                val towardNext = e2.rawY < e1.rawY && !webtoon.canScrollVertically(1) && hasAdjacentChapter(1)
                 val towardPrevious = e2.rawY > e1.rawY && !webtoon.canScrollVertically(-1) && index > 0
                 if (!towardNext && !towardPrevious) return false
                 webtoon.stopScroll()
@@ -398,7 +398,7 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     }
 
     private fun updateNextChapterPrompt() {
-        val show = !pagerMode && pages.isNotEmpty() && index < chapters.lastIndex &&
+        val show = !pagerMode && pages.isNotEmpty() && hasAdjacentChapter(1) &&
             !webtoon.canScrollVertically(1) && errorView.visibility != View.VISIBLE
         if (show) {
             nextChapterPrompt.visibility = View.VISIBLE
@@ -437,8 +437,15 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     }
 
     private fun openAdjacent(delta: Int) {
-        val target = index + delta
-        if (target !in chapters.indices) {
+        val navigationTarget = if (delta > 0 && app.prefs.skipDuplicateChaptersAndGaidens) {
+            ChapterNavigation.next(chapters, index)
+        } else {
+            null
+        }
+        val target = navigationTarget?.index
+            ?: if (delta > 0 && app.prefs.skipDuplicateChaptersAndGaidens) null
+            else (index + delta).takeIf { it in chapters.indices }
+        if (target == null) {
             toast(if (delta > 0) "No next chapter" else "No previous chapter")
             return
         }
@@ -452,8 +459,27 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
             hideNextChapterPrompt()
         }, 500)
         if (!pagerMode) webtoon.stopScroll()
-        loadChapter(chapters[target].id, if (delta < 0) Int.MAX_VALUE else 0)
+        val targetChapterId = chapters[target].id
+        val skippedIds = navigationTarget?.skippedChapterIds.orEmpty()
+        if (skippedIds.isEmpty()) {
+            loadChapter(targetChapterId, if (delta < 0) Int.MAX_VALUE else 0)
+        } else {
+            lifecycleScope.launch {
+                skippedIds.toList().chunked(400).forEach { app.db.chapterDao().setRead(it, true) }
+                chapters = chapters.map { chapter ->
+                    if (chapter.id in skippedIds) chapter.copy(read = true) else chapter
+                }
+                loadChapter(targetChapterId, 0)
+            }
+        }
     }
+
+    private fun hasAdjacentChapter(delta: Int): Boolean =
+        if (delta > 0 && app.prefs.skipDuplicateChaptersAndGaidens) {
+            ChapterNavigation.next(chapters, index) != null
+        } else {
+            index + delta in chapters.indices
+        }
 
     // ------------------------------------------------------------------ input
 

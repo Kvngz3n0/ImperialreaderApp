@@ -29,15 +29,17 @@ For manga and comics, tap the reader to show controls. Choose left-to-right, rig
 2. Put local files under `local/<Title>/`. Each archive, PDF, EPUB, PSD, PSB, CLIP, or image subfolder is treated as a chapter. PSD, PSB, and CLIP files use an embedded flattened preview when available; layered editing is not supported.
 3. Choose **More → Scan local library** to import or refresh your local titles.
 
-PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs and PDFs, or browse supported web-novel catalogs including NovelArrow and RoliaScans Novels. The RoliaScans novel extension lists text novels and their chapters; downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
+PDFs open in a paged reader with page navigation and saved progress. You can also browse Project Gutenberg and Internet Archive for EPUBs and PDFs, or browse supported web-novel catalogs including NovelArrow and RoliaScans Novels. Downloaded web-novel chapters can be packaged as an EPUB. EPUB reading includes adjustable text size, dark/sepia/light themes, text-to-speech, and a seekable chapter progress bar.
 
 ## What it can do
 
 ### Discover and search
 
-- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including Roliascans, RavenScans.org, AllPornComic, and Pawchive.
-- Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and RoliaScans Novels. Internet Archive results include readable EPUB and PDF files.
+- Browse manga, manhwa, manhua, webcomics, and western comics from built-in sources, including WEBTOON, Hentai Cosplay XXX, Roliascans, RavenScans.org, AllPornComic, Pawchive, and Comix.to.
+- Browse online EPUB and web-novel catalogs, including Project Gutenberg, Internet Archive, Royal Road, NovelArrow, and supported web-novel sites. Internet Archive results include readable EPUB and PDF files.
 - Search across online catalogs from **Browse** or from the library's global search. Global search preserves same-title results from separate catalogs, combines manga sources when requested, and offers optional genre/tag and artist filters.
+- Global Search runs up to five source operations at a time, streams results as each source completes, retries temporary network failures, and lets you retry failed sources without restarting. Its progress summary reports the total incomplete-source count; **Show only sources with results** hides sources with no results.
+- Comick uses its public browsing API and shared app networking. Actual Cloudflare challenges are distinguished from ordinary HTTP and network errors; if automatic resolution is unsuccessful, open the source in WebView to complete the challenge and retry.
 - Add a custom manga site by name and URL. Imperial Reader attempts to detect supported site engines when you first open it.
 - Enable or disable sources and open a source in the in-app WebView. The WebView can help with sites that require a Cloudflare challenge.
 - Adult (18+) sources and ratings are hidden by default and can be enabled in Settings after age confirmation.
@@ -50,12 +52,13 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 - See unread, downloaded/local, and new-chapter counts, with display options in Settings. The **Updates** tab badge shows unseen chapter updates and clears when you open the tab; updates remain listed and are dimmed until new chapters arrive.
 - Set a custom cover for a title from its details screen. Tap the cover in the details header to view it full-screen and save it to Pictures.
 - The details/chapter list temporarily samples accent colors from the title cover and returns to the app theme when closed.
-- Refresh a title's chapter list or update the library for new chapters.
+- Refresh a title's chapter list or update the library for new chapters. Library refresh checks online entries with up to 10 concurrent source operations, then scans local entries. Scheduled and on-app-start refreshes use persistent foreground WorkManager jobs so they can continue when the app is backgrounded or closed.
 
 ### Read, track, and download
 
-- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts. Animated GIF pages and Pawchive MP4 posts are supported; on Pawchive videos, tap the video-controls button to show or hide playback controls.
+- Read online or downloaded manga/comic chapters in left-to-right, right-to-left, or vertical/webtoon layouts. Animated GIF pages and Pawchive MP4 posts are supported.
 - Resume reading progress, move between chapters, and optionally use screen-edge taps or volume keys for page navigation.
+- Enable **More → Settings → Skip duplicate chapters and gaidens** to prefer the current scanlation when moving to the next chapter. Duplicate chapter variants and intervening gaidens are marked read; when the current scanlation has no further unread chapters, navigation can continue with another scanlation.
 - Bookmark chapters, mark chapters read or unread, and see reading history. Incognito mode disables reading-history entries.
 - Queue chapter downloads, follow the queue in **More**, and read downloaded chapters offline. Large multi-chapter downloads are grouped by title and can be paused or resumed together.
 - Browse and read EPUBs and web novels, seek between EPUB sections, resume saved chapter/page progress, adjust text size and theme, and listen with device text-to-speech.
@@ -63,7 +66,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 
 ### Local files and backups
 
-- Read online and downloaded PSD and PSB chapter pages by converting their flattened composite previews to cached images.
+- Read online PSD and PSB chapter pages by converting their flattened composite previews to cached images, including downloaded pages.
 - Import local image folders and CBZ, ZIP, CBR, RAR, PDF, EPUB, PSD, PSB, and CLIP files as library titles. PSD, PSB, and CLIP reading uses embedded previews when available.
 - Read local titles from the library and refresh the scan when files change.
 - Choose where downloads and local files are stored; without a selected folder, the app uses private app storage.
@@ -75,6 +78,7 @@ PDFs open in a paged reader with page navigation and saved progress. You can als
 Open **More → Settings** to configure:
 
 - Default manga/comic reading direction, screen-on behavior, fullscreen mode, edge taps, and volume-key navigation.
+- Optional duplicate-chapter and gaiden skipping while preserving the current scanlation when possible.
 - Library grid columns, unread/download badges, and refreshing the library on app start.
 - Cover extraction for local entries.
 - Visibility of adult sources and ratings.

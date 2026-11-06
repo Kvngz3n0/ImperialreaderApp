@@ -13,8 +13,10 @@ import com.imperialreader.data.db.AppDatabase
 import com.imperialreader.data.download.DownloadManager
 import com.imperialreader.data.network.NetworkHelper
 import com.imperialreader.data.repo.MangaRepository
+import com.imperialreader.data.search.SearchConcurrencyController
 import com.imperialreader.data.source.SourceManager
 import com.imperialreader.data.storage.StorageManager
+import com.imperialreader.data.update.LibraryRefreshConcurrencyController
 import com.imperialreader.security.AppLockManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,6 +36,15 @@ class App : Application(), ImageLoaderFactory {
     val db by lazy { AppDatabase.create(this) }
     val storage by lazy { StorageManager(this) }
     val sources by lazy { SourceManager(this) }
+    val searchConcurrency by lazy { SearchConcurrencyController(prefs.globalSearchConcurrency) }
+    val libraryRefreshConcurrency by lazy {
+        LibraryRefreshConcurrencyController { sourceId, operation, queueWaitMs, durationMs ->
+            Log.d(
+                "LibraryRefresh",
+                "source=$sourceId operation=$operation queueWaitMs=$queueWaitMs durationMs=$durationMs"
+            )
+        }
+    }
     val repo by lazy { MangaRepository(this) }
     val downloads by lazy { DownloadManager(this) }
     val appLockManager by lazy { AppLockManager(this) }

@@ -20,8 +20,12 @@ class ComickSource : HttpSource() {
     override val lang = "en"
     override val baseUrl = "https://comick.live"
 
+    private val requestLimiter = Semaphore(2)
     private val latestCursors = ConcurrentHashMap<Int, String>()
     private val searchCursors = ConcurrentHashMap<String, ConcurrentHashMap<Int, String>>()
+
+    override suspend fun getString(url: String, headers: Map<String, String>): String =
+        requestLimiter.withPermit { super.getString(url, headers) }
 
     override suspend fun getPopular(page: Int): MangasPage {
         val (days, type) = when (page) {
@@ -33,7 +37,7 @@ class ComickSource : HttpSource() {
             6 -> 90 to "most_follow_new"
             else -> return MangasPage(emptyList(), false)
         }
-        val data = JSONObject(getString("$baseUrl/api/comics/top?day=$days&type=$type"))
+        val data = JSONObject(getString("$baseUrl/api/comics/top?day=$days&type=$type", API_HEADERS))
             .requiredArray("data")
         return MangasPage(data.toMangas(), page < 6)
     }
@@ -47,7 +51,7 @@ class ComickSource : HttpSource() {
                 append("&cursor=").append(enc(cursor))
             }
         }
-        val response = JSONObject(getString(url))
+        val response = JSONObject(getString(url, API_HEADERS))
         val results = response.requiredArray("data")
         val cursor = response.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
         cursor?.let { latestCursors[page] = it }
@@ -71,7 +75,7 @@ class ComickSource : HttpSource() {
                 append("&cursor=").append(enc(cursor))
             }
         }
-        val response = JSONObject(getString(url))
+        val response = JSONObject(getString(url, API_HEADERS))
         val results = response.requiredArray("data")
         val cursor = response.optString("next_cursor").takeIf { it.isNotBlank() && it != "null" }
         cursor?.let { cursors[page] = it }
@@ -136,10 +140,9 @@ class ComickSource : HttpSource() {
             ?: throw IllegalStateException("Comick chapter list did not include pagination.")
         if (lastPage < 1) throw IllegalStateException("Comick returned an invalid chapter page count.")
         val pages = coroutineScope {
-            val limiter = Semaphore(3)
             (2..lastPage).map { page ->
                 async {
-                    limiter.withPermit { chapterList(manga.url, page).requiredArray("data") }
+                    chapterList(manga.url, page).requiredArray("data")
                 }
             }.awaitAll()
         }
@@ -204,7 +207,12 @@ class ComickSource : HttpSource() {
     }
 
     private suspend fun chapterList(slug: String, page: Int): JSONObject =
-        JSONObject(getString("$baseUrl/api/comics/${enc(slug)}/chapter-list?lang=en&page=$page"))
+        JSONObject(
+            getString(
+                "$baseUrl/api/comics/${enc(slug)}/chapter-list?lang=en&page=$page",
+                API_HEADERS
+            )
+        )
             .also { it.requiredArray("data") }
 
     private fun JSONObject.requiredArray(key: String): JSONArray =
@@ -233,5 +241,12 @@ class ComickSource : HttpSource() {
         for (index in 0 until length()) {
             optJSONObject(index)?.let(action)
         }
+    }
+
+    private companion object {
+        val API_HEADERS = mapOf(
+            "Accept" to "application/json",
+            "X-Requested-With" to "XMLHttpRequest"
+        )
     }
 }

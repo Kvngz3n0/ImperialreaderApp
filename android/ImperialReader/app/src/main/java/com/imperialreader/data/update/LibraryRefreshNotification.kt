@@ -4,8 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.work.ForegroundInfo
 import com.imperialreader.R
 
 object LibraryRefreshNotification {
@@ -16,6 +18,20 @@ object LibraryRefreshNotification {
 
     @Synchronized
     fun show(context: Context, done: Int, total: Int) {
+        manager(context).notify(NOTIFICATION_ID, buildNotification(context, done, total))
+    }
+
+    fun foregroundInfo(context: Context, done: Int, total: Int): ForegroundInfo {
+        val notification = buildNotification(context, done, total)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(NOTIFICATION_ID, notification)
+        }
+    }
+
+    @Synchronized
+    private fun buildNotification(context: Context, done: Int, total: Int): Notification {
         ensureChannel(context)
         if (done == 0 || total != currentTotal) {
             lastDone = 0
@@ -29,8 +45,7 @@ object LibraryRefreshNotification {
         } else {
             "Preparing library refresh…"
         }
-        val notification = notification(context, text, total, reportedDone)
-        manager(context).notify(NOTIFICATION_ID, notification)
+        return notification(context, text, total, reportedDone)
     }
 
     @Synchronized
@@ -45,6 +60,7 @@ object LibraryRefreshNotification {
             .setSmallIcon(R.drawable.ic_updates)
             .setContentTitle("Refreshing library")
             .setContentText(text)
+            .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setProgress(total, done, total <= 0)
             .build()

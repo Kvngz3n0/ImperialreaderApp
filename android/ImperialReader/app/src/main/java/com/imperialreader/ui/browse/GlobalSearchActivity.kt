@@ -3,6 +3,8 @@ package com.imperialreader.ui.browse
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -36,6 +38,8 @@ import com.imperialreader.data.source.CombinedSource
 import com.imperialreader.data.source.MangasPage
 import com.imperialreader.data.source.SManga
 import com.imperialreader.data.source.normalizeTitle
+import com.imperialreader.data.network.CloudflareException
+import com.imperialreader.data.source.HttpStatusException
 import com.imperialreader.ui.books.BookActions
 import com.imperialreader.ui.common.CardItem
 import com.imperialreader.ui.common.LibraryActions
@@ -43,7 +47,9 @@ import com.imperialreader.ui.common.MangaCardAdapter
 import com.imperialreader.ui.common.RowAdapter
 import com.imperialreader.ui.common.RowItem
 import com.imperialreader.ui.common.StarSpriteView
+import com.imperialreader.ui.common.loadCover
 import com.imperialreader.ui.details.MangaDetailsActivity
+import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.parseChapterNumber
 import com.imperialreader.util.relativeTime
@@ -53,19 +59,36 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeout
+import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 
 const val KIND_SOURCE = 0
 const val KIND_LIBRARY = 1
 const val KIND_EPUB = 2
+
+enum class SourceSearchStatus {
+    PENDING,
+    SEARCHING,
+    RETRYING,
+    COMPLETED,
+    COMPLETED_WITH_ERRORS,
+    TIMED_OUT,
+    FAILED
+}
 
 data class SourceResult(
     val sourceId: String,
@@ -75,8 +98,48 @@ data class SourceResult(
     val error: String? = null,
     val chapterCount: Int = -1,
     val latest: Long = 0L,
-    val kind: Int = KIND_SOURCE
+    val kind: Int = KIND_SOURCE,
+    val status: SourceSearchStatus = SourceSearchStatus.PENDING,
+    val resultCount: Int = cards.size,
+    val challengeUrl: String? = null
 )
+
+private data class SourceSearchOperation(
+    val maxPages: Int,
+    val fetchPage: suspend (Int) -> MangasPage
+)
+
+private data class SourceSearchBatch(
+    val mangas: List<SManga>,
+    val error: String?,
+    val nextPage: Int?,
+    val status: SourceSearchStatus = SourceSearchStatus.COMPLETED
+)
+
+private class SearchDeadlineBudget(var sourceDeadlineElapsedRealtimeMs: Long? = null)
+
+private class RequestTimedOutException(message: String, cause: Throwable? = null) : IOException(message, cause)
+private class SourceSearchDeadlineException(message: String, cause: Throwable? = null) : IOException(message, cause)
+private class OverallSearchDeadlineException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+private class SourceSearchWork(
+    val source: com.imperialreader.data.source.Source,
+    val query: String,
+    val combine: Boolean,
+    val generation: Int
+) {
+    val operations = LinkedHashMap<String, SourceSearchOperation>()
+    val results = LinkedHashMap<String, List<SManga>>()
+    val operationErrors = LinkedHashMap<String, String>()
+    val challengeUrls = LinkedHashMap<String, String>()
+    val operationStates = LinkedHashMap<String, SourceSearchStatus>()
+    val nextPages = HashMap<String, Int>()
+    val metadataMatches = LinkedHashMap<String, SManga>()
+    val metadataChecked = HashSet<String>()
+    val metadataFailures = LinkedHashMap<String, SManga>()
+    val deadlineBudget = SearchDeadlineBudget()
+    var metadataTimedOut = false
+}
 
 private data class GroupMember(val sourceId: String, val manga: SManga)
 
@@ -120,6 +183,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         private const val REQUEST_SHOW_MIGRATION_ENTRY = 1
         private const val MAX_SOURCE_SEARCH_PAGES = 20
         private const val MAX_METADATA_SEARCH_PAGES = 5
+        private val RETRY_DELAYS_MS = longArrayOf(1_000L, 3_000L, 6_000L)
 
         fun intent(ctx: Context, query: String): Intent =
             Intent(ctx, GlobalSearchActivity::class.java).putExtra(EXTRA_QUERY, query)
@@ -142,15 +206,25 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
     private val groups = MutableStateFlow<List<TitleGroup>>(emptyList())
     private val tick = MutableStateFlow(0)
     private val hits = LinkedHashMap<String, List<SManga>>()
+    private val searchResultsLock = Any()
+    private val sourceSearchWork = LinkedHashMap<String, SourceSearchWork>()
     private val stats = HashMap<String, GroupStats>()
     private var currentQuery = ""
     private var genreFilter = ""
     private var artistFilter = ""
     private var searchJob: Job? = null
+    private var retryJob: Job? = null
+    private var initialSearchInProgress = false
+    private var retryInProgress = false
     private var searchGeneration = 0
+    private var overallDeadlineElapsedRealtimeMs = 0L
+    private var searchDeadlineMessage: String? = null
     private var pendingMigrationConfirmation: PendingMigrationConfirmation? = null
 
     private lateinit var emptyText: TextView
+    private lateinit var searchProgress: TextView
+    private lateinit var retryFailedButton: MaterialButton
+    private lateinit var openChallengeButton: MaterialButton
     private lateinit var sprite: StarSpriteView
     private lateinit var sectionAdapter: SectionAdapter
     private lateinit var titleAdapter: RowAdapter
@@ -198,7 +272,20 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         }
         val recycler = findViewById<RecyclerView>(R.id.recycler)
         emptyText = findViewById(R.id.emptyText)
+        searchProgress = findViewById(R.id.searchProgress)
+        retryFailedButton = findViewById(R.id.retryFailedSources)
+        openChallengeButton = findViewById(R.id.openChallengeSource)
         sprite = findViewById(R.id.searchSprite)
+        retryFailedButton.setOnClickListener { retryFailedSources() }
+        openChallengeButton.setOnClickListener {
+            val url = sourceSearchWork.values.firstNotNullOfOrNull { it.challengeUrls.values.firstOrNull() }
+            if (url == null) {
+                toast("No unresolved Cloudflare challenge")
+            } else {
+                startActivity(WebViewActivity.intent(this, url))
+            }
+        }
+        if (migrationMode) retryFailedButton.text = "Retry unavailable sources"
 
         val combine = findViewById<MaterialCheckBox>(R.id.checkCombine)
         val only = findViewById<MaterialCheckBox>(R.id.checkOnlyResults)
@@ -230,6 +317,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         )
         recycler.layoutManager = LinearLayoutManager(this)
         recycler.adapter = ConcatAdapter(sectionAdapter, titleAdapter)
+        refreshSearchProgress()
 
         lifecycleScope.launch {
             combine(sections, groups, tick) { s, g, _ -> s to g }.collect { (s, g) -> render(s, g) }
@@ -256,31 +344,37 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
 
     private fun render(all: List<SourceResult>, grouped: List<TitleGroup>) {
         val combine = migrationCombinedMode || (!migrationMode && app.prefs.searchCombine)
-        val onlyResults = app.prefs.searchOnlyResults
+        val onlyResults = !migrationMode && app.prefs.searchOnlyResults
 
         val extra = all.asSequence()
-            .filter {
-                it.kind != KIND_SOURCE || (combine && it.error != null)
-            }
-            .filter {
-                it.cards.isNotEmpty() || it.error != null && (!onlyResults || it.kind == KIND_SOURCE)
-            }
-            .map { if (onlyResults && it.kind != KIND_SOURCE) it.copy(error = null) else it }
+            .filter { it.kind != KIND_SOURCE }
+            .filter { !onlyResults || it.cards.isNotEmpty() }
             .toList()
-        val perSource = if (combine) emptyList() else {
-            val list = all.filter { it.kind == KIND_SOURCE }
-            sortSources(if (onlyResults) list.filter { it.cards.isNotEmpty() || it.error != null } else list)
+        val sourceResults = all.filter { it.kind == KIND_SOURCE }
+        val visibleSources = if (onlyResults) {
+            sourceResults.filter { it.cards.isNotEmpty() }
+        } else {
+            sourceResults
         }
-        sectionAdapter.submitList(extra + perSource)
+        val sourceSections = sortSources(visibleSources).map {
+            if (combine) it.copy(cards = emptyList()) else it
+        }
+        sectionAdapter.submitList(extra + sourceSections)
 
         val rows = if (combine) visibleGroups(grouped).map { toRow(it) } else emptyList()
         titleAdapter.submitList(rows)
 
         val searching = all.any { it.loading }
-        val anything = extra.isNotEmpty() || rows.isNotEmpty() || perSource.any { it.cards.isNotEmpty() }
+        val anything = extra.isNotEmpty() || rows.isNotEmpty() ||
+            sourceSections.any { it.resultCount > 0 || it.error != null || it.loading }
         emptyText.visibility = if (all.isNotEmpty() && !searching && !anything) View.VISIBLE else View.GONE
         val errors = all.count { it.error != null }
-        emptyText.text = if (errors > 0) "No results • $errors source(s) could not be reached" else "No results"
+        val failureSummary = when {
+            onlyResults && errors > 0 -> "No results • $errors source(s) incomplete; see search status above"
+            errors > 0 -> "No results • $errors source(s) incomplete"
+            else -> "No results"
+        }
+        emptyText.text = failureSummary
     }
 
     private fun sortSources(list: List<SourceResult>): List<SourceResult> {
@@ -401,40 +495,172 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         query.trim().split(Regex("""\s+""")).count { word -> word.any(Char::isLetter) } >= 2
 
     private suspend fun collectSourcePages(
-        semaphore: Semaphore,
-        maxPages: Int,
-        fetchPage: suspend (Int) -> MangasPage
-    ): Pair<List<SManga>, String?> {
+        work: SourceSearchWork,
+        operation: String,
+        startPage: Int,
+        pageCount: Int,
+        fetchPage: suspend (Int) -> MangasPage,
+        onPage: (List<SManga>) -> Unit
+    ): SourceSearchBatch {
         val found = LinkedHashMap<String, SManga>()
-        var page = 1
-        var pageLimitReached = false
-        while (page <= maxPages) {
+        work.results[operation].orEmpty().forEach { found[it.url] = it }
+        val endPage = startPage + pageCount - 1
+        var page = startPage
+        while (page <= endPage) {
             val result = try {
-                semaphore.withPermit {
-                    fetchPage(page)
-                }
-            } catch (e: TimeoutCancellationException) {
-                return found.values.toList() to "Search timed out on page $page"
+                searchRequest(work, operation) { fetchPage(page) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                return found.values.toList() to (e.message ?: "Search failed on page $page")
+                logSearchFailure(work.source.id, operation, e)
+                    if (e is CloudflareException) work.challengeUrls[operation] = e.url
+                    return SourceSearchBatch(
+                    found.values.toList(),
+                    "Page $page: ${e.message ?: failureCategory(e)}",
+                    page,
+                    when {
+                        e is OverallSearchDeadlineException || e is SourceSearchDeadlineException ->
+                            SourceSearchStatus.TIMED_OUT
+                        found.isNotEmpty() -> SourceSearchStatus.COMPLETED_WITH_ERRORS
+                        else -> SourceSearchStatus.FAILED
+                    }
+                )
             }
             result.mangas.forEach { manga ->
                 if (manga.url.isNotBlank()) found.putIfAbsent(manga.url, manga)
             }
-            if (result.mangas.isEmpty() || !result.hasNextPage) break
-            if (page == maxPages) {
-                pageLimitReached = true
-                break
+            onPage(found.values.toList())
+            if (result.mangas.isEmpty() || !result.hasNextPage) {
+                return SourceSearchBatch(found.values.toList(), null, null)
             }
             page++
         }
-        return found.values.toList() to if (pageLimitReached) {
-            "More results may be available after $maxPages pages"
-        } else {
-            null
+        return SourceSearchBatch(
+            found.values.toList(),
+            "More results may be available after page $endPage",
+            endPage + 1
+        )
+    }
+
+    private suspend fun <T> searchRequest(
+        work: SourceSearchWork,
+        operation: String,
+        request: suspend () -> T
+    ): T {
+        var retry = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
+                val now = SystemClock.elapsedRealtime()
+                val overallRemaining = overallDeadlineElapsedRealtimeMs - now
+                if (overallRemaining <= 0L) throw OverallSearchDeadlineException("Overall search deadline exceeded")
+                try {
+                    val result = app.searchConcurrency.withPermit(
+                        onAcquired = {
+                            if (work.deadlineBudget.sourceDeadlineElapsedRealtimeMs == null) {
+                                work.deadlineBudget.sourceDeadlineElapsedRealtimeMs =
+                                    SystemClock.elapsedRealtime() + app.prefs.globalSearchSourceDeadlineMs
+                            }
+                            setOperationStatus(work, operation, SourceSearchStatus.SEARCHING)
+                        }
+                    ) {
+                        val acquiredAt = SystemClock.elapsedRealtime()
+                        val sourceDeadline = work.deadlineBudget.sourceDeadlineElapsedRealtimeMs
+                            ?: (acquiredAt + app.prefs.globalSearchSourceDeadlineMs).also {
+                                work.deadlineBudget.sourceDeadlineElapsedRealtimeMs = it
+                            }
+                        val sourceRemaining = sourceDeadline - acquiredAt
+                        val remainingOverall = overallDeadlineElapsedRealtimeMs - acquiredAt
+                        if (sourceRemaining <= 0L) throw SourceSearchDeadlineException("Source search deadline exceeded")
+                        if (remainingOverall <= 0L) throw OverallSearchDeadlineException("Overall search deadline exceeded")
+                        try {
+                            withTimeout(minOf(app.prefs.globalSearchRequestTimeoutMs, sourceRemaining, remainingOverall)) {
+                                request()
+                            }
+                        } catch (e: TimeoutCancellationException) {
+                            currentCoroutineContext().ensureActive()
+                            val timedOutAt = SystemClock.elapsedRealtime()
+                            when {
+                                timedOutAt >= overallDeadlineElapsedRealtimeMs ->
+                                    throw OverallSearchDeadlineException("Overall search deadline exceeded", e)
+                                timedOutAt >= sourceDeadline ->
+                                    throw SourceSearchDeadlineException("${work.source.name} source deadline exceeded", e)
+                                else -> throw RequestTimedOutException("${work.source.name} request timed out", e)
+                            }
+                        }
+                    }
+                    setOperationStatus(work, operation, SourceSearchStatus.PENDING)
+                    return result
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    currentCoroutineContext().ensureActive()
+                    if (e is OverallSearchDeadlineException || e is SourceSearchDeadlineException) throw e
+                    if (!isTransientFailure(e) || retry >= RETRY_DELAYS_MS.size) throw e
+                    scheduleRetry(work, operation, retry++, e)
+                }
         }
+    }
+
+    private suspend fun scheduleRetry(
+        work: SourceSearchWork,
+        operation: String,
+        retry: Int,
+        failure: Throwable? = null
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        val remaining = minOf(
+            overallDeadlineElapsedRealtimeMs,
+            work.deadlineBudget.sourceDeadlineElapsedRealtimeMs ?: overallDeadlineElapsedRealtimeMs
+        ) - now
+        if (remaining <= 0L) {
+            if (now >= overallDeadlineElapsedRealtimeMs) throw OverallSearchDeadlineException("Overall search deadline exceeded")
+            throw SourceSearchDeadlineException("${work.source.name} source deadline exceeded")
+        }
+        val retryAfter = (failure as? HttpStatusException)?.retryAfterMs
+        val baseDelay = retryAfter ?: RETRY_DELAYS_MS[retry]
+        val jitter = if (retryAfter != null) 0L else (baseDelay * 0.2 * kotlin.random.Random.nextDouble()).toLong()
+        setOperationStatus(work, operation, SourceSearchStatus.RETRYING)
+        delay(minOf(baseDelay + jitter, remaining))
+    }
+
+    private fun isTransientFailure(error: Throwable): Boolean = when (error) {
+        is SSLException, is CloudflareException,
+        is SourceSearchDeadlineException, is OverallSearchDeadlineException -> false
+        is HttpStatusException -> isTransientHttpCode(error.code)
+        is RequestTimedOutException, is UnknownHostException, is SocketTimeoutException, is ConnectException -> true
+        is SocketException -> error !is SSLException
+        else -> httpStatusCode(error)?.let(::isTransientHttpCode) ?: false
+    }
+
+    private fun failureCategory(error: Throwable): String = when (error) {
+        is HttpStatusException -> "HTTP ${error.code}"
+        is OverallSearchDeadlineException -> "overall search deadline"
+        is SourceSearchDeadlineException -> "source search deadline"
+        is RequestTimedOutException -> "request timeout"
+        is SSLException -> "TLS certificate or handshake error"
+        is UnknownHostException -> "DNS resolution error"
+        is SocketTimeoutException, is TimeoutCancellationException -> "connection timeout"
+        is ConnectException, is SocketException -> "connection error"
+        is CloudflareException -> "website protection challenge"
+        else -> when {
+            httpStatusCode(error) != null -> "HTTP ${httpStatusCode(error)}"
+            error is IOException -> "network or source error"
+            else -> "source parsing or search error"
+        }
+    }
+
+    private fun isTransientHttpCode(code: Int): Boolean =
+        code == 408 || code == 429 || code in 500..599
+
+    private fun httpStatusCode(error: Throwable): Int? =
+        Regex("""\bHTTP\s+(\d{3})\b""", RegexOption.IGNORE_CASE)
+            .find(error.message.orEmpty())
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+
+    private fun logSearchFailure(sourceId: String, operation: String, error: Throwable) {
+        Log.w("GlobalSearch", "$sourceId $operation failed (${failureCategory(error)}): ${error.message}", error)
     }
 
     // ---------------------------------------------------------------- searching
@@ -618,24 +844,48 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
     private fun runSearch(q: String, extensions: Boolean, selectedIds: Set<String>) {
         if (q.isBlank() && !hasSearchFilters()) {
             searchJob?.cancel()
+            retryJob?.cancel()
+            searchGeneration++
+            initialSearchInProgress = false
+            retryInProgress = false
+            searchDeadlineMessage = null
+            sourceSearchWork.clear()
             sections.value = emptyList()
             groups.value = emptyList()
-            hits.clear()
-            stats.clear()
+            synchronized(searchResultsLock) {
+                hits.clear()
+                stats.clear()
+            }
+            sprite.stop()
+            refreshSearchProgress()
             return
         }
         searchJob?.cancel()
+        retryJob?.cancel()
+        retryInProgress = false
         val generation = ++searchGeneration
         currentQuery = q
-        hits.clear()
-        stats.clear()
+        synchronized(searchResultsLock) {
+            hits.clear()
+            stats.clear()
+        }
+        sourceSearchWork.clear()
         groups.value = emptyList()
         val combine = migrationCombinedMode || app.prefs.searchCombine
+        val overallDeadlineMs = app.prefs.globalSearchOverallDeadlineMs
+        overallDeadlineElapsedRealtimeMs = SystemClock.elapsedRealtime() + overallDeadlineMs
+        searchDeadlineMessage = null
 
+        initialSearchInProgress = true
         searchJob = lifecycleScope.launch {
             sprite.start()
             try {
-                searchAll(q, combine, extensions, selectedIds)
+                withTimeout(overallDeadlineMs) {
+                    searchAll(q, combine, extensions, selectedIds, generation)
+                }
+            } catch (e: TimeoutCancellationException) {
+                currentCoroutineContext().ensureActive()
+                markSearchTimedOut(generation, "Overall search deadline reached; partial results were kept.")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -646,23 +896,65 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                             sourceId = "search-error",
                             sourceName = "Global Search",
                             loading = false,
-                            error = message
+                            error = message,
+                            status = SourceSearchStatus.FAILED
                         )
                     )
                 } else {
                     sections.update { results ->
                         results.map { result ->
-                            if (result.loading) result.copy(loading = false, error = message) else result
+                            if (result.loading) {
+                                result.copy(loading = false, error = message, status = SourceSearchStatus.FAILED)
+                            } else result
                         }
                     }
                 }
             } finally {
-                if (generation == searchGeneration) sprite.stop()
+                if (generation == searchGeneration) {
+                    initialSearchInProgress = false
+                    sprite.stop()
+                    refreshSearchProgress()
+                }
             }
         }
     }
 
-    private suspend fun searchAll(q: String, combine: Boolean, extensions: Boolean, selectedIds: Set<String>) {
+    private fun markSearchTimedOut(generation: Int, message: String) {
+        if (generation != searchGeneration) return
+        searchDeadlineMessage = message
+        sourceSearchWork.values.forEach { work ->
+            work.operationStates.toMap().forEach { (operation, status) ->
+                if (status in setOf(
+                        SourceSearchStatus.PENDING,
+                        SourceSearchStatus.SEARCHING,
+                        SourceSearchStatus.RETRYING
+                    )
+                ) {
+                    work.operationErrors[operation] = message
+                    work.operationStates[operation] = SourceSearchStatus.TIMED_OUT
+                }
+            }
+            publishSourceStatus(work)
+        }
+        update("epub") {
+            if (!it.loading) it
+            else it.copy(
+                loading = false,
+                error = listOfNotNull(it.error, message).distinct().joinToString("\n")
+            )
+        }
+        refreshSearchProgress()
+    }
+
+    private suspend fun searchAll(
+        q: String,
+        combine: Boolean,
+        extensions: Boolean,
+        selectedIds: Set<String>,
+        generation: Int
+    ) {
+        searchProgress.visibility = if (extensions) View.GONE else View.VISIBLE
+        retryFailedButton.visibility = if (extensions) View.GONE else View.VISIBLE
         coroutineScope {
             val initial = mutableListOf<SourceResult>()
             if (!migrationMode) {
@@ -686,6 +978,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                     )
                 }
             }
+            if (generation != searchGeneration) return@coroutineScope
             val extensionSources = if (extensions) {
                 BookSources.all.filter { it.inGlobalSearch && it.id in selectedIds }
             } else {
@@ -702,100 +995,66 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
             sources.forEach { initial += SourceResult(sourceId = it.id, sourceName = it.name) }
             sections.value = initial
 
-            val searchSem = Semaphore(2)
-            val rankSem = searchSem
+            sourceSearchWork.clear()
             coroutineScope {
-                if (extensions) launch { searchEpubs(q, searchSem, extensionSources) }
+                if (extensions) launch { searchEpubs(q, extensionSources, generation) }
+                sources.forEach { source ->
+                    val work = SourceSearchWork(
+                        source = source,
+                        query = q,
+                        combine = combine,
+                        generation = generation
+                    )
+                    work.operations["titles"] = SourceSearchOperation(
+                        if (q.isBlank()) 1 else MAX_SOURCE_SEARCH_PAGES
+                    ) { page -> if (q.isBlank()) source.getPopular(page) else source.search(q, page) }
+                    if (q.length >= 2) {
+                        work.operations["genres"] = SourceSearchOperation(MAX_METADATA_SEARCH_PAGES) { page ->
+                            source.searchByGenre(q, page)
+                        }
+                    }
+                    if (isAuthorQuery(q)) {
+                        work.operations["authors"] = SourceSearchOperation(MAX_METADATA_SEARCH_PAGES) { page ->
+                            source.searchByAuthor(q, page)
+                        }
+                    }
+                    work.operations.keys.forEach { work.operationStates[it] = SourceSearchStatus.PENDING }
+                    if (hasSearchFilters()) work.operationStates["metadata"] = SourceSearchStatus.PENDING
+                    sourceSearchWork[source.id] = work
+                }
+                refreshSearchProgress()
                 sources.map { s ->
                     async {
-                        val found: List<SManga> = try {
-                            val titleLookup = async {
-                                collectSourcePages(
-                                    searchSem,
-                                    if (q.isBlank()) 1 else MAX_SOURCE_SEARCH_PAGES
-                                ) { page ->
-                                    if (q.isBlank()) s.getPopular(page) else s.search(q, page)
-                                }
-                            }
-                            val genreLookup = if (q.length >= 2) async {
-                                collectSourcePages(searchSem, MAX_METADATA_SEARCH_PAGES) { page ->
-                                    s.searchByGenre(q, page)
-                                }
-                            } else null
-                            val authorLookup = if (isAuthorQuery(q)) async {
-                                collectSourcePages(searchSem, MAX_METADATA_SEARCH_PAGES) { page ->
-                                    s.searchByAuthor(q, page)
-                                }
-                            } else null
-                            val (titles, titleError) = titleLookup.await()
-                            val (genres, genreError) = genreLookup?.await() ?: (emptyList<SManga>() to null)
-                            val (authors, authorError) = authorLookup?.await() ?: (emptyList<SManga>() to null)
-                            val titleUrls = (titles + authors).mapTo(HashSet()) { it.url }
-                            val candidates = (titles + genres + authors)
-                                .distinctBy { it.url }
-                                .sortedWith(
-                                    compareBy<SManga> { searchRelevance(it.title, q) }
-                                        .thenBy { if (it.url in titleUrls) 0 else 1 }
-                                        .thenBy { it.title }
-                                )
-                            val sourceError = listOfNotNull(
-                                titleError?.let { "Title search failed: $it" },
-                                genreError,
-                                authorError
-                            ).joinToString("\n").ifBlank { null }
-                            sourceError?.let { error ->
-                                update(s.id) { it.copy(error = error) }
-                            }
-                            if (!hasSearchFilters()) {
-                                candidates
-                            } else {
-                                var failures = 0
-                                val matched = candidates.mapNotNull { candidate ->
-                                    try {
-                                        val details = searchSem.withPermit { s.getMangaDetails(candidate) }
-                                        details.takeIf(::matchesFilters)
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (_: Exception) {
-                                        failures++
-                                        null
-                                    }
-                                }
-                                if (failures > 0) {
-                                    update(s.id) {
-                                        it.copy(error = "$failures result(s) could not be checked against metadata filters")
-                                    }
-                                }
-                                matched
-                            }
-                        } catch (e: TimeoutCancellationException) {
-                            update(s.id) { it.copy(loading = false, error = "Search timed out") }
-                            return@async
+                        val work = sourceSearchWork.getValue(s.id)
+                        try {
+                            runSourceSearch(work, retryOnlyFailed = false)
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            update(s.id) { it.copy(loading = false, error = e.message ?: "Failed") }
-                            return@async
-                        }
-                        val headers = s.imageHeaders()
-                        hits[s.id] = found
-                        rebuildGroups()
-                        update(s.id) {
-                            it.copy(
-                                loading = false,
-                                cards = found.map { m ->
-                                    CardItem(key = "${s.id}${m.url}", title = m.title, cover = m.thumbnailUrl, headers = headers, tag = m)
-                                }
-                            )
+                            logSearchFailure(s.id, "source search", e)
+                            val operation = work.operations.keys.firstOrNull {
+                                work.operationStates[it] in setOf(
+                                    SourceSearchStatus.PENDING,
+                                    SourceSearchStatus.SEARCHING,
+                                    SourceSearchStatus.RETRYING
+                                )
+                            } ?: work.operations.keys.first()
+                            work.operationErrors[operation] = e.message ?: failureCategory(e)
+                            setOperationStatus(work, operation, SourceSearchStatus.FAILED)
+                            publishWorkResults(work)
                         }
                         // per-source ranking is only needed when the combined view is off
+                        val found = hits[s.id].orEmpty()
                         if (!combine && found.isNotEmpty()) {
                             val best = found.firstOrNull { it.title.equals(q, ignoreCase = true) } ?: found.first()
                             val chapters = try {
-                                rankSem.withPermit { s.getChapters(best) }
+                                app.searchConcurrency.withPermit {
+                                    withTimeout(app.prefs.globalSearchRequestTimeoutMs) { s.getChapters(best) }
+                                }
                             } catch (e: CancellationException) {
                                 throw e
-                            } catch (_: Exception) {
+                            } catch (e: Exception) {
+                                logSearchFailure(s.id, "chapter count", e)
                                 null
                             }
                             if (chapters != null) {
@@ -807,7 +1066,311 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                     }
                 }.awaitAll()
             }
-            if (combine && !extensions) computeStats(searchSem)
+            if (combine && !extensions && generation == searchGeneration) computeStats(generation)
+        }
+    }
+
+    private suspend fun runSourceSearch(work: SourceSearchWork, retryOnlyFailed: Boolean) {
+        val selected = work.operations.filter { (operation, _) ->
+            !retryOnlyFailed || operation in work.operationErrors
+        }
+        selected.forEach { (name, spec) ->
+            if (work.generation != searchGeneration) return
+            try {
+                setOperationStatus(work, name, SourceSearchStatus.PENDING)
+                val startPage = work.nextPages[name] ?: 1
+                val batch = collectSourcePages(
+                    work = work,
+                    operation = name,
+                    startPage = startPage,
+                    pageCount = spec.maxPages,
+                    fetchPage = spec.fetchPage,
+                    onPage = { results ->
+                        work.results[name] = results
+                        publishWorkResults(work)
+                    }
+                )
+                work.results[name] = batch.mangas
+                batch.nextPage?.let { work.nextPages[name] = it } ?: work.nextPages.remove(name)
+                if (batch.error == null) {
+                    work.operationErrors.remove(name)
+                    work.challengeUrls.remove(name)
+                    if (batch.mangas.isEmpty()) {
+                        Log.d("GlobalSearch", "${work.source.id} $name completed successfully with no results")
+                    }
+                    setOperationStatus(work, name, SourceSearchStatus.COMPLETED)
+                } else {
+                    work.operationErrors[name] = batch.error
+                    setOperationStatus(work, name, batch.status)
+                }
+                publishWorkResults(work)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (e is OverallSearchDeadlineException) throw e
+                logSearchFailure(work.source.id, name, e)
+                if (e is CloudflareException) work.challengeUrls[name] = e.url
+                work.operationErrors[name] = e.message ?: failureCategory(e)
+                setOperationStatus(
+                    work,
+                    name,
+                    if (e is SourceSearchDeadlineException) SourceSearchStatus.TIMED_OUT else SourceSearchStatus.FAILED
+                )
+            }
+        }
+        if (hasSearchFilters() && work.generation == searchGeneration) {
+            val sourceDeadline = work.deadlineBudget.sourceDeadlineElapsedRealtimeMs
+            if (sourceDeadline != null && SystemClock.elapsedRealtime() >= sourceDeadline) {
+                work.operationStates.toMap().forEach { (operation, status) ->
+                    if (status in setOf(
+                            SourceSearchStatus.PENDING,
+                            SourceSearchStatus.SEARCHING,
+                            SourceSearchStatus.RETRYING
+                        )
+                    ) {
+                        work.operationErrors[operation] = "${work.source.name} source deadline exceeded"
+                        work.operationStates[operation] = SourceSearchStatus.TIMED_OUT
+                    }
+                }
+                publishSourceStatus(work)
+            } else {
+                runMetadataFilter(work, retryOnlyFailed)
+            }
+        }
+        publishWorkResults(work)
+    }
+
+    private suspend fun runMetadataFilter(work: SourceSearchWork, retryOnlyFailed: Boolean) {
+        val candidates = work.results.values.flatten().distinctBy { it.url }
+            .sortedWith(compareBy<SManga> { searchRelevance(it.title, work.query) }.thenBy { it.title })
+        val toCheck = if (retryOnlyFailed) {
+            (
+                work.metadataFailures.values +
+                    candidates.filter { it.url !in work.metadataChecked && it.url !in work.metadataFailures }
+                ).distinctBy { it.url }
+        } else {
+            candidates.filter { it.url !in work.metadataChecked && it.url !in work.metadataFailures }
+        }
+        if (toCheck.isEmpty() && work.metadataFailures.isEmpty()) {
+            work.operationErrors.remove("metadata")
+            setOperationStatus(work, "metadata", SourceSearchStatus.COMPLETED)
+            return
+        }
+        setOperationStatus(work, "metadata", SourceSearchStatus.PENDING)
+        for (candidate in toCheck) {
+            if (work.generation != searchGeneration) return
+            try {
+                val details = searchRequest(work, "metadata") {
+                    work.source.getMangaDetails(candidate)
+                }
+                work.metadataChecked += candidate.url
+                work.metadataFailures.remove(candidate.url)
+                if (matchesFilters(details)) work.metadataMatches[candidate.url] = details
+                else work.metadataMatches.remove(candidate.url)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logSearchFailure(work.source.id, "metadata filter", e)
+                work.metadataFailures[candidate.url] = candidate
+                if (e is CloudflareException) work.challengeUrls["metadata"] = e.url
+                if (e is OverallSearchDeadlineException) throw e
+                if (e is SourceSearchDeadlineException) {
+                    work.metadataTimedOut = true
+                    break
+                }
+            }
+            publishWorkResults(work)
+        }
+        if (work.metadataFailures.isEmpty()) {
+            work.operationErrors.remove("metadata")
+            work.challengeUrls.remove("metadata")
+            setOperationStatus(work, "metadata", SourceSearchStatus.COMPLETED)
+        } else {
+            work.operationErrors["metadata"] =
+                "${work.metadataFailures.size} result(s) could not be checked against metadata filters"
+            setOperationStatus(
+                work,
+                "metadata",
+                if (work.metadataTimedOut) SourceSearchStatus.TIMED_OUT else SourceSearchStatus.FAILED
+            )
+        }
+        publishWorkResults(work)
+    }
+
+    private fun setOperationStatus(
+        work: SourceSearchWork,
+        operation: String,
+        status: SourceSearchStatus
+    ) {
+        if (work.generation != searchGeneration) return
+        work.operationStates[operation] = status
+        publishSourceStatus(work)
+    }
+
+    private fun publishSourceStatus(work: SourceSearchWork) {
+        if (work.generation != searchGeneration) return
+        val states = work.operationStates.values
+        val status = when {
+            SourceSearchStatus.RETRYING in states -> SourceSearchStatus.RETRYING
+            SourceSearchStatus.SEARCHING in states -> SourceSearchStatus.SEARCHING
+            SourceSearchStatus.PENDING in states -> SourceSearchStatus.PENDING
+            SourceSearchStatus.TIMED_OUT in states -> SourceSearchStatus.TIMED_OUT
+            work.operationErrors.isNotEmpty() &&
+                states.any { it == SourceSearchStatus.COMPLETED } -> SourceSearchStatus.COMPLETED_WITH_ERRORS
+            work.operationErrors.isNotEmpty() -> SourceSearchStatus.FAILED
+            else -> SourceSearchStatus.COMPLETED
+        }
+        val error = work.operationErrors.entries.joinToString("\n") { (name, message) ->
+            "${name.replaceFirstChar(Char::uppercase)}: $message"
+        }.ifBlank { null }
+        update(work.source.id) {
+            it.copy(
+                loading = status in setOf(
+                    SourceSearchStatus.PENDING,
+                    SourceSearchStatus.SEARCHING,
+                    SourceSearchStatus.RETRYING
+                ),
+                status = status,
+                error = error,
+                resultCount = synchronized(searchResultsLock) { hits[work.source.id].orEmpty().size },
+                challengeUrl = work.challengeUrls.values.firstOrNull()
+            )
+        }
+        refreshSearchProgress()
+    }
+
+    private fun publishWorkResults(work: SourceSearchWork) {
+        if (work.generation != searchGeneration) return
+        val titleUrls = (work.results["titles"].orEmpty() + work.results["authors"].orEmpty())
+            .mapTo(HashSet()) { it.url }
+        val candidates = (if (hasSearchFilters()) work.metadataMatches.values else work.results.values.flatten())
+            .distinctBy { it.url }
+            .sortedWith(
+                compareBy<SManga> { searchRelevance(it.title, work.query) }
+                    .thenBy { if (it.url in titleUrls) 0 else 1 }
+                    .thenBy { it.title }
+            )
+        synchronized(searchResultsLock) {
+            if (work.generation != searchGeneration) return
+            hits[work.source.id] = candidates
+            rebuildGroupsLocked()
+        }
+        val headers = work.source.imageHeaders()
+        update(work.source.id) {
+            it.copy(
+                cards = candidates.map { manga ->
+                    CardItem(
+                        key = "${work.source.id}${manga.url}",
+                        title = manga.title,
+                        cover = manga.thumbnailUrl,
+                        headers = headers,
+                        tag = manga
+                    )
+                },
+                resultCount = candidates.size
+            )
+        }
+    }
+
+    private fun refreshSearchProgress() {
+        if (!::searchProgress.isInitialized || !::retryFailedButton.isInitialized ||
+            !::openChallengeButton.isInitialized
+        ) return
+        val results = sections.value.filter { it.kind == KIND_SOURCE }
+        val completed = results.count {
+            it.status == SourceSearchStatus.COMPLETED ||
+                it.status == SourceSearchStatus.COMPLETED_WITH_ERRORS ||
+                it.status == SourceSearchStatus.FAILED ||
+                it.status == SourceSearchStatus.TIMED_OUT
+        }
+        val active = results.count { it.status == SourceSearchStatus.SEARCHING }
+        val queued = results.count { it.status == SourceSearchStatus.PENDING }
+        val retrying = results.count { it.status == SourceSearchStatus.RETRYING }
+        val failed = results.count {
+            it.status in setOf(
+                SourceSearchStatus.FAILED,
+                SourceSearchStatus.COMPLETED_WITH_ERRORS,
+                SourceSearchStatus.TIMED_OUT
+            )
+        }
+        searchProgress.text = buildString {
+            append("$completed/${results.size} finished • $active active • $queued queued • $retrying retrying • $failed incomplete")
+            searchDeadlineMessage?.let { append("\n$it") }
+        }
+        retryFailedButton.isEnabled = !initialSearchInProgress && !retryInProgress &&
+            results.none { it.loading } &&
+            sourceSearchWork.values.any { it.operationErrors.isNotEmpty() }
+        openChallengeButton.visibility =
+            if (sourceSearchWork.values.any { it.challengeUrls.isNotEmpty() }) View.VISIBLE else View.GONE
+        openChallengeButton.isEnabled = !initialSearchInProgress && !retryInProgress
+    }
+
+    private fun retryFailedSources() {
+        if (retryInProgress || retryJob?.isActive == true) return
+        val failed = sourceSearchWork.values.filter { it.operationErrors.isNotEmpty() }
+        if (failed.isEmpty()) {
+            toast("No failed or incomplete sources to retry")
+            return
+        }
+        val generation = searchGeneration
+        retryInProgress = true
+        searchDeadlineMessage = null
+        refreshSearchProgress()
+        retryJob = lifecycleScope.launch {
+            failed.forEach { work ->
+                work.operationErrors.keys.forEach { operation ->
+                    work.operationStates[operation] = SourceSearchStatus.PENDING
+                }
+                work.deadlineBudget.sourceDeadlineElapsedRealtimeMs = null
+                work.metadataTimedOut = false
+                publishSourceStatus(work)
+            }
+            val retryDeadlineMs = app.prefs.globalSearchOverallDeadlineMs
+            overallDeadlineElapsedRealtimeMs = SystemClock.elapsedRealtime() + retryDeadlineMs
+            var retryTimedOut = false
+            try {
+                withTimeout(retryDeadlineMs) {
+                    failed.map { work ->
+                        async {
+                            if (work.generation == generation) {
+                                runSourceSearch(work, retryOnlyFailed = true)
+                            }
+                        }
+                    }.awaitAll()
+                }
+            } catch (e: TimeoutCancellationException) {
+                currentCoroutineContext().ensureActive()
+                retryTimedOut = true
+                failed.forEach { work ->
+                    work.operationStates.toMap().forEach { (operation, state) ->
+                        if (state in setOf(
+                                SourceSearchStatus.PENDING,
+                                SourceSearchStatus.SEARCHING,
+                                SourceSearchStatus.RETRYING
+                            )
+                        ) {
+                            work.operationErrors[operation] = "Overall retry deadline reached; partial results were kept."
+                            work.operationStates[operation] = SourceSearchStatus.TIMED_OUT
+                        }
+                    }
+                    publishSourceStatus(work)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logSearchFailure("manual-retry", "failed source recovery", e)
+                toast("Retry could not finish: ${e.message ?: "unexpected error"}")
+                return@launch
+            } finally {
+                retryInProgress = false
+                refreshSearchProgress()
+            }
+            if (generation == searchGeneration) {
+                if (!retryTimedOut && failed.any { it.combine }) computeStats(generation)
+                val recovered = failed.count { it.operationErrors.isEmpty() }
+                val stillIncomplete = failed.size - recovered
+                toast("Retry finished: $recovered recovered, $stillIncomplete still incomplete.")
+            }
         }
     }
 
@@ -815,7 +1378,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         sections.update { list -> list.map { if (it.sourceId == id) transform(it) else it } }
     }
 
-    private suspend fun searchEpubs(q: String, sem: Semaphore, sources: List<BookSource>) {
+    private suspend fun searchEpubs(q: String, sources: List<BookSource>, generation: Int) {
         val results = Channel<Pair<List<BookItem>, String?>>(Channel.UNLIMITED)
         val found = mutableListOf<BookItem>()
         val errors = mutableListOf<String>()
@@ -824,34 +1387,35 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
             sources.forEach { source ->
                 launch {
                     val result = try {
+                        val deadline = SearchDeadlineBudget()
                         var titleError: String? = null
                         val titles = try {
-                            withTimeout(8_000L) {
-                                sem.withPermit {
-                                    if (q.isBlank()) source.popular(1) else source.search(q, 1)
-                                }
+                            bookSearchRequest(source, "title", deadline) {
+                                if (q.isBlank()) source.popular(1) else source.search(q, 1)
                             }
                         } catch (e: TimeoutCancellationException) {
+                            logSearchFailure(source.id, "book title", e)
                             titleError = "Title search timed out"
                             emptyList()
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
+                            logSearchFailure(source.id, "book title", e)
                             titleError = e.message ?: "Title search failed"
                             emptyList()
                         }
                         var genreError: String? = null
                         val genres = if (q.length >= 2) {
                             try {
-                                withTimeout(4_000L) {
-                                    sem.withPermit { source.searchByGenre(q, 1) }
-                                }
+                                bookSearchRequest(source, "genre", deadline) { source.searchByGenre(q, 1) }
                             } catch (e: TimeoutCancellationException) {
+                                logSearchFailure(source.id, "book genre", e)
                                 genreError = "Genre search timed out"
                                 emptyList()
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
+                                logSearchFailure(source.id, "book genre", e)
                                 genreError = e.message ?: "Genre search failed"
                                 emptyList()
                             }
@@ -859,15 +1423,15 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                         var authorError: String? = null
                         val authors = if (isAuthorQuery(q)) {
                             try {
-                                withTimeout(8_000L) {
-                                    sem.withPermit { source.searchByAuthor(q, 1) }
-                                }
+                                bookSearchRequest(source, "author", deadline) { source.searchByAuthor(q, 1) }
                             } catch (e: TimeoutCancellationException) {
+                                logSearchFailure(source.id, "book author", e)
                                 authorError = "Author search timed out"
                                 emptyList()
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
+                                logSearchFailure(source.id, "book author", e)
                                 authorError = e.message ?: "Author search failed"
                                 emptyList()
                             }
@@ -884,13 +1448,14 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                             var failures = 0
                             val books = candidateItems.mapNotNull { item ->
                                 try {
-                                    val detailed = withTimeout(12_000L) {
-                                        sem.withPermit { source.details(item) }
+                                    val detailed = bookSearchRequest(source, "metadata", deadline) {
+                                        source.details(item)
                                     }
                                     detailed.takeIf(::matchesFilters)
                                 } catch (e: CancellationException) {
                                     throw e
-                                } catch (_: Exception) {
+                                } catch (e: Exception) {
+                                    logSearchFailure(source.id, "book metadata", e)
                                     failures++
                                     null
                                 }
@@ -906,10 +1471,12 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                             ).joinToString("\n").ifBlank { null }
                         }
                     } catch (e: TimeoutCancellationException) {
+                        logSearchFailure(source.id, "book search", e)
                         emptyList<BookItem>() to "${source.name}: timed out"
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
+                        logSearchFailure(source.id, "book search", e)
                         emptyList<BookItem>() to "${source.name}: ${e.message ?: "search failed"}"
                     }
                     results.send(result)
@@ -920,30 +1487,121 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                 completed++
                 found += books
                 error?.let(errors::add)
-                val cards = found.distinctBy { it.key }
-                    .sortedWith(compareBy<BookItem> { searchRelevance(it.title, q) }.thenBy { it.title })
-                    .map { item ->
-                    val badge = when {
-                        BookSources.get(item.sourceId)?.isWebNovel == true -> "NOVEL"
-                        item.pdfUrl != null -> "PDF"
-                        else -> "EPUB"
+                if (generation == searchGeneration) {
+                    val cards = found.distinctBy { it.key }
+                        .sortedWith(compareBy<BookItem> { searchRelevance(it.title, q) }.thenBy { it.title })
+                        .map { item ->
+                        val badge = when {
+                            BookSources.get(item.sourceId)?.isWebNovel == true -> "NOVEL"
+                            item.pdfUrl != null -> "PDF"
+                            else -> "EPUB"
+                        }
+                        CardItem(key = item.key, title = item.title, cover = item.coverUrl, badge1 = badge, tag = item)
                     }
-                    CardItem(key = item.key, title = item.title, cover = item.coverUrl, badge1 = badge, tag = item)
-                }
-                val errorText = errors.take(3).joinToString("\n")
-                    .let { summary -> if (errors.size > 3) "$summary\n+${errors.size - 3} more source errors" else summary }
-                    .ifBlank { null }
-                update("epub") {
-                    it.copy(loading = completed < sources.size, cards = cards, error = errorText)
+                    val errorText = errors.take(3).joinToString("\n")
+                        .let { summary -> if (errors.size > 3) "$summary\n+${errors.size - 3} more source errors" else summary }
+                        .ifBlank { null }
+                    update("epub") {
+                        it.copy(loading = completed < sources.size, cards = cards, error = errorText)
+                    }
                 }
             }
         }
         results.close()
-        if (sources.isEmpty()) update("epub") { it.copy(loading = false) }
+        if (sources.isEmpty() && generation == searchGeneration) update("epub") { it.copy(loading = false) }
+    }
+
+    private suspend fun <T> bookSearchRequest(
+        source: BookSource,
+        operation: String,
+        deadline: SearchDeadlineBudget,
+        request: suspend () -> T
+    ): T {
+        var retry = 0
+        while (true) {
+            currentCoroutineContext().ensureActive()
+            val now = SystemClock.elapsedRealtime()
+            if (overallDeadlineElapsedRealtimeMs - now <= 0L) {
+                throw OverallSearchDeadlineException("Overall search deadline exceeded")
+            }
+            try {
+                return app.searchConcurrency.withPermit(
+                    onAcquired = {
+                        if (deadline.sourceDeadlineElapsedRealtimeMs == null) {
+                            deadline.sourceDeadlineElapsedRealtimeMs =
+                                SystemClock.elapsedRealtime() + app.prefs.globalSearchSourceDeadlineMs
+                        }
+                    }
+                ) {
+                    val started = SystemClock.elapsedRealtime()
+                    val sourceDeadline = deadline.sourceDeadlineElapsedRealtimeMs
+                        ?: (started + app.prefs.globalSearchSourceDeadlineMs).also {
+                            deadline.sourceDeadlineElapsedRealtimeMs = it
+                        }
+                    val sourceRemaining = sourceDeadline - started
+                    val overallRemaining = overallDeadlineElapsedRealtimeMs - started
+                    if (sourceRemaining <= 0L) {
+                        throw SourceSearchDeadlineException("${source.name} source deadline exceeded")
+                    }
+                    if (overallRemaining <= 0L) {
+                        throw OverallSearchDeadlineException("Overall search deadline exceeded")
+                    }
+                    try {
+                        withTimeout(minOf(app.prefs.globalSearchRequestTimeoutMs, sourceRemaining, overallRemaining)) {
+                            request()
+                        }
+                    } catch (e: TimeoutCancellationException) {
+                        currentCoroutineContext().ensureActive()
+                        val timedOutAt = SystemClock.elapsedRealtime()
+                        when {
+                            timedOutAt >= overallDeadlineElapsedRealtimeMs ->
+                                throw OverallSearchDeadlineException("Overall search deadline exceeded", e)
+                            timedOutAt >= sourceDeadline ->
+                                throw SourceSearchDeadlineException("${source.name} source deadline exceeded", e)
+                            else -> throw RequestTimedOutException("${source.name} $operation timed out", e)
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                currentCoroutineContext().ensureActive()
+                if (e is OverallSearchDeadlineException || e is SourceSearchDeadlineException) throw e
+                if (!isTransientFailure(e) || retry >= RETRY_DELAYS_MS.size) throw e
+                val remaining = minOf(
+                    overallDeadlineElapsedRealtimeMs,
+                    deadline.sourceDeadlineElapsedRealtimeMs ?: overallDeadlineElapsedRealtimeMs
+                ) - SystemClock.elapsedRealtime()
+                if (remaining <= 0L) {
+                    if (SystemClock.elapsedRealtime() >= overallDeadlineElapsedRealtimeMs) {
+                        throw OverallSearchDeadlineException("Overall search deadline exceeded", e)
+                    }
+                    throw SourceSearchDeadlineException("${source.name} source deadline exceeded", e)
+                }
+                val retryAfter = (e as? HttpStatusException)?.retryAfterMs
+                val backoff = if (retryAfter != null) {
+                    retry++
+                    retryAfter
+                } else {
+                    delayWithJitter(retry++)
+                }
+                delay(minOf(backoff, remaining))
+            }
+        }
+    }
+
+    private fun delayWithJitter(retry: Int): Long {
+        val baseDelay = RETRY_DELAYS_MS[retry]
+        val jitter = (baseDelay * 0.2 * kotlin.random.Random.nextDouble()).toLong()
+        return baseDelay + jitter
     }
 
     /** Groups every source's hits by normalised title so the same series shows up once. */
-    private fun rebuildGroups() {
+    private fun rebuildGroups() = synchronized(searchResultsLock) {
+        rebuildGroupsLocked()
+    }
+
+    private fun rebuildGroupsLocked() {
         val byKey = LinkedHashMap<String, MutableList<GroupMember>>()
         for ((sid, list) in hits) {
             for (m in list) {
@@ -969,7 +1627,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
     }
 
     /** Fetches the chapter lists of every source for the top titles and merges them. */
-    private suspend fun computeStats(searchSem: Semaphore) {
+    private suspend fun computeStats(generation: Int) {
         val top = visibleGroups(groups.value).take(10)
         coroutineScope {
             top.map { g ->
@@ -978,7 +1636,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                         val lists = CombinedSource.fetchAll(
                             g.members.map { CombinedSource.Member(it.sourceId, it.manga.url) },
                             g.title,
-                            limiter = searchSem
+                            sharedLimiter = app.searchConcurrency
                         )
                         val merged = CombinedSource.merge(lists)
                         GroupStats(
@@ -996,8 +1654,14 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                     } catch (e: Exception) {
                         GroupStats(0, -1f, 0L, emptyMap(), e.message)
                     }
-                    stats[g.key] = result
-                    rebuildGroups()
+                    if (generation == searchGeneration) {
+                        synchronized(searchResultsLock) {
+                            if (generation == searchGeneration) {
+                                stats[g.key] = result
+                                rebuildGroupsLocked()
+                            }
+                        }
+                    }
                 }
             }.awaitAll()
         }
@@ -1124,6 +1788,53 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
         val previewActions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
+        val targetPreview = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            val padding = (20 * resources.displayMetrics.density).toInt()
+            setPadding(0, padding, 0, padding)
+        }
+        targetPreview.addView(android.widget.ImageView(this).apply {
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+            loadCover(
+                target.thumbnailUrl,
+                app.sources.get(targetSourceId)?.imageHeaders() ?: emptyMap()
+            )
+        }, LinearLayout.LayoutParams(
+            (64 * resources.displayMetrics.density).toInt(),
+            (88 * resources.displayMetrics.density).toInt()
+        ))
+        targetPreview.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val padding = (12 * resources.displayMetrics.density).toInt()
+            setPadding(padding, 0, 0, 0)
+            addView(TextView(this@GlobalSearchActivity).apply {
+                text = target.title
+                textSize = 15f
+                setTextColor(getColor(R.color.on_surface))
+            })
+            listOfNotNull(target.author, target.artist)
+                .filter(String::isNotBlank)
+                .distinct()
+                .takeIf { it.isNotEmpty() }
+                ?.let { creators ->
+                    addView(TextView(this@GlobalSearchActivity).apply {
+                        text = creators.joinToString(" • ")
+                        textSize = 12f
+                        setTextColor(getColor(R.color.on_surface_variant))
+                        setPadding(0, (4 * resources.displayMetrics.density).toInt(), 0, 0)
+                    })
+                }
+            target.description?.takeIf(String::isNotBlank)?.let { description ->
+                addView(TextView(this@GlobalSearchActivity).apply {
+                    text = description
+                    maxLines = 3
+                    textSize = 12f
+                    setTextColor(getColor(R.color.on_surface_variant))
+                    setPadding(0, (4 * resources.displayMetrics.density).toInt(), 0, 0)
+                })
+            }
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val showEntry = MaterialButton(this).apply {
             text = "Show entry"
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -1136,6 +1847,7 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             val padding = (20 * resources.displayMetrics.density).toInt()
             setPadding(padding, 0, padding, 0)
+            addView(targetPreview)
             addView(chapterProgress)
             addView(category)
             addView(history)
@@ -1416,15 +2128,25 @@ class GlobalSearchActivity : androidx.appcompat.app.AppCompatActivity() {
                     KIND_EPUB -> if (s.cards.isNotEmpty()) append("${s.cards.size} books and novels available")
                     KIND_LIBRARY -> {}
                     else -> {
-                        if (s.cards.isNotEmpty()) append("${s.cards.size} results")
+                        if (s.resultCount > 0) append("${s.resultCount} results")
                         if (s.chapterCount >= 0) append(" • ${s.chapterCount} chapters")
                         if (s.latest > 0) append(" • updated ${relativeTime(s.latest)}")
+                        append(
+                            when (s.status) {
+                                SourceSearchStatus.PENDING -> " • queued"
+                                SourceSearchStatus.SEARCHING -> " • searching"
+                                SourceSearchStatus.RETRYING -> " • retrying"
+                                SourceSearchStatus.COMPLETED -> " • complete"
+                                SourceSearchStatus.COMPLETED_WITH_ERRORS,
+                                SourceSearchStatus.TIMED_OUT,
+                                SourceSearchStatus.FAILED -> ""
+                            }
+                        )
                     }
                 }
             }.trimStart(' ', '•')
             h.progress.visibility = if (s.loading) View.VISIBLE else View.GONE
-            h.error.visibility = if (s.error != null) View.VISIBLE else View.GONE
-            h.error.text = s.error.orEmpty()
+            h.error.visibility = View.GONE
             h.recycler.visibility = if (s.cards.isEmpty()) View.GONE else View.VISIBLE
             h.cards.submitList(s.cards)
         }

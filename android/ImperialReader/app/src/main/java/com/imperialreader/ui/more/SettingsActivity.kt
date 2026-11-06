@@ -8,6 +8,8 @@ import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.ListPreference
 import androidx.preference.SwitchPreferenceCompat
+import androidx.lifecycle.lifecycleScope
+import com.imperialreader.App
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.appbar.MaterialToolbar
 import com.imperialreader.R
@@ -15,6 +17,7 @@ import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.update.AutomaticAppUpdateScheduler
 import com.imperialreader.data.update.LibraryUpdateScheduler
 import com.imperialreader.util.toast
+import kotlinx.coroutines.launch
 
 class SettingsActivity : androidx.appcompat.app.AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,6 +100,12 @@ class SettingsActivity : androidx.appcompat.app.AppCompatActivity() {
             }
             findPreference<ListPreference>("automatic_cover_refresh_interval")?.setOnPreferenceChangeListener { _, newValue ->
                 (newValue as? String)?.toLongOrNull() != null
+            }
+            findPreference<ListPreference>("global_search_concurrency")?.setOnPreferenceChangeListener { _, newValue ->
+                val value = (newValue as? String)?.toIntOrNull() ?: return@setOnPreferenceChangeListener false
+                if (value !in 1..5) return@setOnPreferenceChangeListener false
+                lifecycleScope.launch { App.instance.searchConcurrency.setLimit(value) }
+                true
             }
 
             findPreference<SwitchPreferenceCompat>("show_nsfw_ext")?.setOnPreferenceChangeListener { pref, newValue ->

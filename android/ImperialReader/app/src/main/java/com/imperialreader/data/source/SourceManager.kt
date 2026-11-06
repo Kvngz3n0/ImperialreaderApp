@@ -12,6 +12,7 @@ class SourceManager(private val context: Context) {
     private val builtin: List<Source> = listOf(
         MangaDexSource(),
         ComickSource(),
+        WebtoonsSource(),
         MangaKSource(),
         MangaKatanaSource(),
         MangaPillSource(),
@@ -51,6 +52,7 @@ class SourceManager(private val context: Context) {
             idOverride = "generic_allporncomic_com",
             nsfw = true
         ),
+        HentaiCosplaySource(),
         PawchiveSource(),
         // Western comics
         WordPressSource("TritiniaScans", "https://tritinia.org"),

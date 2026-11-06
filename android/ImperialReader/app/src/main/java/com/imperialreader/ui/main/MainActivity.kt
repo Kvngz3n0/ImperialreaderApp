@@ -14,7 +14,6 @@ import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.data.update.AutomaticAppUpdateScheduler
 import com.imperialreader.data.update.LibraryUpdateScheduler
-import com.imperialreader.data.update.LibraryRefreshNotification
 import com.imperialreader.ui.common.StartupStarAnimation
 import com.imperialreader.util.app
 import kotlinx.coroutines.Dispatchers
@@ -95,19 +94,7 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
             updateDue && !refreshedThisProcess
         ) {
             refreshedThisProcess = true
-            lifecycleScope.launch {
-                LibraryRefreshNotification.show(this@MainActivity, 0, 0)
-                try {
-                    app.repo.updateLibrary(onProgress = { done, total ->
-                        LibraryRefreshNotification.show(this@MainActivity, done, total)
-                    })
-                    app.prefs.libraryUpdatedAt = System.currentTimeMillis()
-                } catch (e: Exception) {
-                    Log.e("MainActivity", "Automatic library update failed", e)
-                } finally {
-                    LibraryRefreshNotification.clear(this@MainActivity)
-                }
-            }
+            LibraryUpdateScheduler.enqueueOnAppStart(applicationContext)
         }
 
         if (Build.VERSION.SDK_INT >= 33 &&

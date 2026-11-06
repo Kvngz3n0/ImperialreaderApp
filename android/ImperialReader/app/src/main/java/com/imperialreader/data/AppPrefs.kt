@@ -59,10 +59,32 @@ class AppPrefs(context: Context) {
             sp.edit { putString("download_concurrency", value.toString()) }
         }
 
+    var globalSearchConcurrency: Int
+        get() = sp.getString("global_search_concurrency", "5")?.toIntOrNull()
+            ?.takeIf { it in 1..5 } ?: 5
+        set(value) {
+            require(value in 1..5) { "Global Search concurrency must be between 1 and 5" }
+            sp.edit { putString("global_search_concurrency", value.toString()) }
+        }
+
+    val globalSearchRequestTimeoutMs: Long
+        get() = sp.getString("global_search_request_timeout", "12000")?.toLongOrNull()
+            ?.takeIf { it in setOf(8_000L, 12_000L, 20_000L) } ?: 12_000L
+
+    val globalSearchSourceDeadlineMs: Long
+        get() = sp.getString("global_search_source_deadline", "90000")?.toLongOrNull()
+            ?.takeIf { it in setOf(45_000L, 90_000L, 120_000L) } ?: 90_000L
+
+    val globalSearchOverallDeadlineMs: Long
+        get() = sp.getString("global_search_overall_deadline", "300000")?.toLongOrNull()
+            ?.takeIf { it in setOf(120_000L, 300_000L, 600_000L) } ?: 300_000L
+
     val keepScreenOn: Boolean get() = sp.getBoolean("keep_screen_on", true)
     val fullscreen: Boolean get() = sp.getBoolean("fullscreen", true)
     val tapNavigation: Boolean get() = sp.getBoolean("tap_navigation", true)
     val volumeKeys: Boolean get() = sp.getBoolean("volume_keys", false)
+    val skipDuplicateChaptersAndGaidens: Boolean
+        get() = sp.getBoolean("skip_duplicate_chapters_and_gaidens", false)
     val showNsfwExtensions: Boolean get() = sp.getBoolean("show_nsfw_ext", false)
 
     val libraryColumns: Int get() = sp.getString("library_columns", "3")?.toIntOrNull() ?: 3

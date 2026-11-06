@@ -36,6 +36,50 @@
         <item>4</item>
         <item>5</item>
     </string-array>
+    <string-array name="global_search_concurrency_names">
+        <item>1 source at a time</item>
+        <item>2 sources at a time</item>
+        <item>3 sources at a time</item>
+        <item>4 sources at a time</item>
+        <item>5 sources at a time</item>
+    </string-array>
+    <string-array name="global_search_concurrency_values">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+    </string-array>
+    <string-array name="global_search_request_timeout_names">
+        <item>8 seconds</item>
+        <item>12 seconds</item>
+        <item>20 seconds</item>
+    </string-array>
+    <string-array name="global_search_request_timeout_values">
+        <item>8000</item>
+        <item>12000</item>
+        <item>20000</item>
+    </string-array>
+    <string-array name="global_search_source_deadline_names">
+        <item>45 seconds</item>
+        <item>90 seconds</item>
+        <item>2 minutes</item>
+    </string-array>
+    <string-array name="global_search_source_deadline_values">
+        <item>45000</item>
+        <item>90000</item>
+        <item>120000</item>
+    </string-array>
+    <string-array name="global_search_overall_deadline_names">
+        <item>2 minutes</item>
+        <item>5 minutes</item>
+        <item>10 minutes</item>
+    </string-array>
+    <string-array name="global_search_overall_deadline_values">
+        <item>120000</item>
+        <item>300000</item>
+        <item>600000</item>
+    </string-array>
     <string-array name="app_lock_timeout_names">
         <item>Immediately</item>
         <item>After 1 minute</item>

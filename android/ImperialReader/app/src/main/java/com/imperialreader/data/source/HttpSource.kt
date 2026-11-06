@@ -1,7 +1,6 @@
 package com.imperialreader.data.source
 
 import com.imperialreader.App
-import com.imperialreader.data.network.CloudflareException
 import com.imperialreader.data.network.await
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -9,9 +8,21 @@ import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.time.Instant
+import java.time.format.DateTimeFormatter
 import java.net.URLEncoder
 
-class HttpStatusException(val code: Int, url: String) : IOException("HTTP $code for $url")
+class HttpStatusException(
+    val code: Int,
+    url: String,
+    val retryAfterMs: Long? = null
+) : IOException(
+    if (retryAfterMs != null) {
+        "HTTP $code for $url; server requested a retry after ${retryAfterMs / 1_000L} seconds"
+    } else {
+        "HTTP $code for $url"
+    }
+)
 
 abstract class HttpSource : Source {
 
@@ -24,7 +35,7 @@ abstract class HttpSource : Source {
     override suspend fun searchByAuthor(query: String, page: Int): MangasPage =
         super<Source>.searchByAuthor(query, page)
 
-    protected suspend fun getString(url: String, headers: Map<String, String> = emptyMap()): String =
+    protected open suspend fun getString(url: String, headers: Map<String, String> = emptyMap()): String =
         execute(Request.Builder().url(url), headers)
 
     protected suspend fun postString(
@@ -47,21 +58,12 @@ abstract class HttpSource : Source {
             val request = builder.build()
             client.await(request).use { resp ->
                 val text = resp.body?.string().orEmpty()
-                val cfChallenge = resp.header("cf-mitigated")?.equals("challenge", ignoreCase = true) == true
-                val challengePage = Regex(
-                    "(?is)<title[^>]*>\\s*(?:just a moment|attention required|checking your browser)"
-                ).containsMatchIn(text)
-                if (cfChallenge || challengePage) {
-                    throw CloudflareException(request.url.toString())
-                }
                 if (!resp.isSuccessful) {
-                    val browserCheck = resp.code == 503 &&
-                        (text.contains("browser_check", ignoreCase = true) ||
-                            text.contains("document.cookie", ignoreCase = true))
-                    if (browserCheck) {
-                        throw CloudflareException(request.url.toString())
-                    }
-                    throw HttpStatusException(resp.code, request.url.toString())
+                    throw HttpStatusException(
+                        resp.code,
+                        request.url.toString(),
+                        parseRetryAfterMillis(resp.header("Retry-After"))
+                    )
                 }
                 text
             }
@@ -74,5 +76,19 @@ abstract class HttpSource : Source {
         url.startsWith("//") -> "https:$url"
         url.startsWith("/") -> baseUrl.trimEnd('/') + url
         else -> baseUrl.trimEnd('/') + "/" + url
+    }
+}
+
+internal fun parseRetryAfterMillis(value: String?, nowMillis: Long = System.currentTimeMillis()): Long? {
+    if (value.isNullOrBlank()) return null
+    value.trim().toLongOrNull()?.let { seconds ->
+        val safeSeconds = seconds.coerceAtLeast(0L)
+        return if (safeSeconds > Long.MAX_VALUE / 1_000L) Long.MAX_VALUE else safeSeconds * 1_000L
+    }
+    return try {
+        (DateTimeFormatter.RFC_1123_DATE_TIME.parse(value.trim(), Instant::from).toEpochMilli() - nowMillis)
+            .coerceAtLeast(0L)
+    } catch (_: Exception) {
+        null
     }
 }
