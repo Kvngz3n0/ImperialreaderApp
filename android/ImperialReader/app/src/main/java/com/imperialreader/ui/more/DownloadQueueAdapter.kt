@@ -85,7 +85,10 @@ internal class DownloadQueueAdapter(
         holder.title.text = group.title
         val pausedCount = group.items.count { it.paused }
         val activeCount = group.items.count { it.downloading && !it.paused }
+        val failedCount = group.items.count { it.failed }
         holder.detail.text = when {
+            failedCount == group.items.size -> "${group.items.size} chapters · Failed"
+            failedCount > 0 -> "${group.items.size} chapters · $activeCount downloading · $failedCount failed"
             pausedCount == group.items.size -> "${group.items.size} chapters · Paused"
             pausedCount > 0 -> "${group.items.size} chapters · $activeCount downloading · $pausedCount paused"
             else -> "${group.items.size} chapters · $activeCount downloading"
@@ -121,6 +124,7 @@ internal class DownloadQueueAdapter(
             append(item.chapterName)
             append(" • ")
             when {
+                item.failed -> append("Failed · ${item.error ?: "Tap actions to retry"}")
                 item.paused -> append(if (item.downloading) "Paused · ${item.progress}%" else "Paused · Queued")
                 item.downloading -> append(if (item.progress > 0) "Downloading · ${item.progress}%" else "Starting download…")
                 else -> append("Queued")
@@ -131,7 +135,7 @@ internal class DownloadQueueAdapter(
             holder.icon.setImageResource(R.drawable.ic_book)
             holder.icon.contentDescription = "Chapter"
         }
-        holder.progress.visibility = if (item.downloading && !item.paused) View.VISIBLE else View.GONE
+        holder.progress.visibility = if (item.downloading && !item.paused && !item.failed) View.VISIBLE else View.GONE
         holder.progress.isIndeterminate = item.downloading && item.progress == 0
         if (item.progress > 0) holder.progress.progress = item.progress
         holder.actions.visibility = if (item.chapterId != null) View.VISIBLE else View.GONE

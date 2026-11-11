@@ -12,7 +12,10 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import com.imperialreader.data.source.GenericSource
@@ -21,6 +24,7 @@ import com.imperialreader.data.source.TapasSupport
 import com.imperialreader.data.source.hostId
 import com.imperialreader.data.source.lazyImage
 import com.imperialreader.data.source.extractGenreTags
+import com.imperialreader.data.source.parseRetryAfterMillis
 import org.json.JSONArray
 import org.jsoup.Jsoup
 import org.json.JSONObject
@@ -140,6 +144,62 @@ internal suspend fun fetchText(url: String): String = withContext(Dispatchers.IO
         resp.body?.string().orEmpty()
     }
 }
+
+private object NovelFireRequestGate {
+    private const val MIN_REQUEST_INTERVAL_MS = 750L
+    private const val DEFAULT_RATE_LIMIT_MS = 30_000L
+    private val mutex = Mutex()
+    private var nextRequestAt = 0L
+
+    suspend fun get(url: String): String = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val waitMs = (nextRequestAt - System.currentTimeMillis()).coerceAtLeast(0L)
+            if (waitMs > 0) delay(waitMs)
+
+            val request = Request.Builder()
+                .url(url)
+                .header("Referer", "https://novelfire.net/")
+                .header("Accept-Language", "en-US,en;q=0.9")
+                .build()
+            try {
+                App.instance.network.client.await(request).use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (response.code == 429) {
+                        val retryAfter = parseRetryAfterMillis(response.header("Retry-After"))
+                        val cooldown = maxOf(retryAfter ?: DEFAULT_RATE_LIMIT_MS, MIN_REQUEST_INTERVAL_MS)
+                        nextRequestAt = maxOf(nextRequestAt, safeAdd(System.currentTimeMillis(), cooldown))
+                        val retryMessage = retryAfter?.let {
+                            val seconds = it / 1_000L + if (it % 1_000L == 0L) 0L else 1L
+                            "Retry-After: wait at least $seconds seconds before retrying."
+                        } ?: "No Retry-After was provided; requests are paused for 30 seconds."
+                        throw IOException("NovelFire rate-limited this request (HTTP 429). $retryMessage")
+                    }
+
+                    val challenged = response.header("cf-mitigated")
+                        ?.equals("challenge", ignoreCase = true) == true ||
+                        (response.code in setOf(403, 503) &&
+                            (response.header("Server")?.contains("cloudflare", true) == true ||
+                                response.header("cf-ray") != null)) ||
+                        body.contains("<title>Just a moment", ignoreCase = true)
+                    if (challenged) throw CloudflareException(url)
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                    if (body.isBlank()) throw IOException("NovelFire returned an empty response")
+                    body
+                }
+            } finally {
+                nextRequestAt = maxOf(
+                    nextRequestAt,
+                    safeAdd(System.currentTimeMillis(), MIN_REQUEST_INTERVAL_MS)
+                )
+            }
+        }
+    }
+
+    private fun safeAdd(left: Long, right: Long): Long =
+        if (right > Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
+}
+
+private suspend fun fetchNovelFireHtml(url: String): String = NovelFireRequestGate.get(url)
 
 private fun enc(s: String) = URLEncoder.encode(s, "UTF-8")
 
@@ -359,10 +419,10 @@ class NovelPhoenixSource : BookSource {
     override suspend fun search(query: String, page: Int): List<BookItem> =
         parseNovels("$base/search?keyword=${enc(query)}&page=$page")
 
-    override suspend fun details(item: BookItem): BookItem = webNovelDetails(item, fetchHtml(item.id))
+    override suspend fun details(item: BookItem): BookItem = webNovelDetails(item, fetchNovelFireHtml(item.id))
 
     private suspend fun parseNovels(url: String): List<BookItem> {
-        val doc = Jsoup.parse(fetchHtml(url), url)
+        val doc = Jsoup.parse(fetchNovelFireHtml(url), url)
         return doc.select("a[href]").asSequence()
             .mapNotNull { a ->
                 val href = novelUrl(a.absUrl("href")) ?: return@mapNotNull null
@@ -511,18 +571,12 @@ class NovelFireSource : BookSource {
         if (lastPage > MAX_CHAPTER_INDEX_PAGES) {
             throw IOException("NovelFire chapter list is too large to load safely ($lastPage pages)")
         }
-        val semaphore = Semaphore(4)
-        val otherPages = coroutineScope {
-            (2..lastPage).map { page ->
-                async {
-                    semaphore.withPermit {
-                        fetchDoc("$book/chapters?page=$page")
-                    }
-                }
-            }.awaitAll()
+        val chapters = buildList {
+            addAll(parseChapters(firstPage))
+            for (page in 2..lastPage) {
+                addAll(parseChapters(fetchDoc("$book/chapters?page=$page")))
+            }
         }
-        val chapters = (listOf(firstPage) + otherPages)
-            .flatMap(::parseChapters)
             .distinctBy { it.url }
         if (chapters.isEmpty()) throw IOException("NovelFire returned no chapters for this title")
         return chapters
@@ -567,7 +621,7 @@ class NovelFireSource : BookSource {
         return content.html()
     }
 
-    private suspend fun fetchDoc(url: String): Document = Jsoup.parse(fetchHtml(url), url)
+    private suspend fun fetchDoc(url: String): Document = Jsoup.parse(fetchNovelFireHtml(url), url)
 
     private fun bookUrl(raw: String): String? {
         val uri = Uri.parse(raw)
@@ -1013,7 +1067,10 @@ object BookSources {
             InternetArchiveSource(),
             RoyalRoadSource(),
             TapasNovelSource(),
-            RoliaScanNovelSource()
+            RoliaScanNovelSource(),
+            WitchCultNovelSource(),
+            BakaTsukiNovelSource(),
+            CyrisiaNovelSource()
         ) +
             novelSites.map { (name, url) ->
                 when {

@@ -1,7 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-
+    <PreferenceCategory android:title="Appearance" app:iconSpaceReserved="false">
+        <Preference
+            android:key="custom_themes"
+            android:title="Appearance"
+            android:summary="Choose a color scheme and system, light, or dark mode"/>
+        <SwitchPreferenceCompat
+            android:key="cascading_animations"
+            android:title="Cascading Animations"
+            android:summary="Animate interface elements in a flowing, sequential fade effect."
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
     <PreferenceCategory android:title="Reader" app:iconSpaceReserved="false">
         <ListPreference
             android:key="reader_mode"
@@ -39,7 +49,39 @@
             app:iconSpaceReserved="false"/>
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="Statistics" app:iconSpaceReserved="false">
+        <Preference
+            android:key="reading_monitor"
+            android:title="Reading monitor"
+            android:summary="View reading and anime playback time, activity, and completed chapters"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="reading_monitor_enabled"
+            android:title="Track reading activity"
+            android:summary="Records foreground reading and active anime playback; disabled by default"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="Library" app:iconSpaceReserved="false">
+        <Preference
+            android:key="manage_categories"
+            android:title="Manage Categories"
+            android:summary="Create, organize, rename and reorder your Library categories."
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="library_transitions_enabled"
+            android:title="Library transitions"
+            android:summary="Animate switching Library categories and main tabs"
+            android:defaultValue="true"
+            app:iconSpaceReserved="false"/>
+        <ListPreference
+            android:key="library_transition_style"
+            android:title="Library transition style"
+            android:defaultValue="fade"
+            android:dependency="library_transitions_enabled"
+            app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
         <ListPreference
             android:key="library_columns"
             android:title="Grid columns"
@@ -129,6 +171,12 @@
     </PreferenceCategory>
 
     <PreferenceCategory android:title="Browse" app:iconSpaceReserved="false">
+        <SwitchPreferenceCompat
+            android:key="source_health_enabled"
+            android:title="Source health monitoring"
+            android:summary="Check enabled sources and extensions when browsing; show status, failures and last successful check"
+            android:defaultValue="false"
+            app:iconSpaceReserved="false"/>
         <ListPreference
             android:key="global_search_concurrency"
             android:title="Global Search concurrency"
@@ -164,6 +212,12 @@
             android:entryValues="@array/global_search_overall_deadline_values"
             android:defaultValue="300000"
             app:useSimpleSummaryProvider="true"
+            app:iconSpaceReserved="false"/>
+        <SwitchPreferenceCompat
+            android:key="show_browse_entry_count"
+            android:title="Show number of entries fetched"
+            android:summary="Show the fetched-entry count at the top of the Browse feeds"
+            android:defaultValue="false"
             app:iconSpaceReserved="false"/>
         <SwitchPreferenceCompat
             android:key="show_nsfw_ext"

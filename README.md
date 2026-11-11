@@ -2,7 +2,7 @@
 
 Imperial Reader is an Android app for discovering and reading manga, manhwa, manhua, comics, EPUB books, and web novels, as well as watching anime and other supported media. It brings online catalogs, downloaded chapters, and your own local files together in one library.
 
-The current release is [V18](https://github.com/Kvngz3n0/ImperialreaderApp/releases/tag/V9) (version code 25). Its APK is debug-signed with the same certificate as the previous V18 build. Because its version code is unchanged, install it manually rather than relying on the in-app updater. The repository's `main` branch currently contains older V15 code; use the source ZIP attached to the release for the actual V18 build source.
+The current release is [V18](https://github.com/Kvngz3n0/ImperialreaderApp/releases/tag/V9) (version code 28). This maintenance rebuild includes theme mode and color scheme in backup/restore, plus a persistent download queue with pause and retry controls. It uses a new debug signing certificate and cannot update the previous V18 installation. Uninstall the previous app before installing this APK; uninstalling can erase app data. Keep the new debug keystore for future updates. The repository's `main` branch currently contains older V15 code; use the source ZIP attached to the release for the actual V18 build source.
 
 > Online catalogs are third-party sites and services. Their availability, content, and site layouts can change; a source that stops working may need to be disabled or replaced.
 

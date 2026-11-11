@@ -10,9 +10,9 @@ import java.time.format.DateTimeParseException
 
 class WitchToonsSource : HttpSource() {
     override val id = "witchtoons_net"
-    override val name = "WitchToons"
+    override val name = "DrakeComic"
     override val lang = "en"
-    override val baseUrl = "https://witchtoons.net"
+    override val baseUrl = "https://drakecomic.net"
 
     override suspend fun getPopular(page: Int): MangasPage = list(page, "views")
 
@@ -20,13 +20,18 @@ class WitchToonsSource : HttpSource() {
 
     override suspend fun search(query: String, page: Int): MangasPage {
         if (query.isBlank()) return MangasPage(emptyList(), false)
-        val json = JSONObject(
-            getString("$baseUrl/api/search?q=${enc(query)}&contentMode=all")
-        )
-        val series = json.optJSONArray("series")
-            ?: throw IOException("WitchToons returned no search results")
-        val mangas = (0 until series.length()).mapNotNull { index ->
-            series.optJSONObject(index)?.toManga()
+        var series: JSONArray? = null
+        for (searchQuery in witchToonsSearchQueries(query)) {
+            val json = JSONObject(
+                getString("$baseUrl/api/search?q=${enc(searchQuery)}&contentMode=all")
+            )
+            series = json.optJSONArray("series")
+                ?: throw IOException("DrakeComic returned no search results")
+            if (series.length() > 0) break
+        }
+        val results = series ?: JSONArray()
+        val mangas = (0 until results.length()).mapNotNull { index ->
+            results.optJSONObject(index)?.toManga()
         }
         return MangasPage(mangas, false)
     }
@@ -72,7 +77,8 @@ class WitchToonsSource : HttpSource() {
         manga.status = when (series.optString("status").uppercase()) {
             "ONGOING" -> 1
             "COMPLETED" -> 2
-            "HIATUS", "CANCELLED", "CANCELED" -> 3
+            "HIATUS" -> 3
+            "CANCELLED", "CANCELED", "AXED", "DISCONTINUED" -> 4
             else -> manga.status
         }
         return manga
@@ -122,6 +128,7 @@ class WitchToonsSource : HttpSource() {
     }
 
     private fun JSONObject.toChapter(seriesSlug: String): SChapter? {
+        if (!isWitchToonsChapterAccessible(this)) return null
         val number = optString("number").takeIf { it.isNotBlank() && it != "null" } ?: return null
         val chapterNumber = number.toFloatOrNull() ?: parseChapterNumber(number)
         if (chapterNumber < 0f) return null
@@ -196,19 +203,11 @@ class WitchToonsSource : HttpSource() {
     }
 
     override suspend fun getPages(chapter: SChapter): List<String> {
-        val html = getString(chapter.url)
-        val serializedImageUrls = Regex(
-            """imageUrl\\?":\\?"((?:[^"\\]|\\u[0-9a-fA-F]{4})*)"""
-        ).findAll(html).map { it.groupValues[1] }
-            .map { it.replace(Regex("""\\u([0-9a-fA-F]{4})""")) { match ->
-                match.groupValues[1].toInt(16).toChar().toString()
-            }.replace("\\/", "/") }
-            .filter { it.contains("/uploads/comic-pages/") }
-            .map(::absoluteUrl)
-            .toList()
-            .distinct()
+        val chapterUrl = canonicalWitchToonsChapterUrl(chapter.url, baseUrl)
+        val html = getString(chapterUrl)
+        val serializedImageUrls = parseWitchToonsPageUrls(html, baseUrl)
         if (serializedImageUrls.isEmpty()) {
-            throw IOException("WitchToons returned no readable pages for this chapter")
+            throw IOException("DrakeComic returned no readable pages for this chapter")
         }
         return serializedImageUrls
     }
@@ -218,4 +217,44 @@ class WitchToonsSource : HttpSource() {
         const val PAGE_SIZE = 100
         const val MAX_CHAPTER_PAGES = 1000
     }
+}
+
+internal fun isWitchToonsChapterAccessible(chapter: JSONObject): Boolean =
+    !chapter.optBoolean("isLocked") || chapter.optBoolean("hasAccess")
+
+internal fun witchToonsSearchQueries(query: String): List<String> =
+    listOf(query.trim(), query.trim().trimEnd { !it.isLetterOrDigit() })
+        .filter(String::isNotBlank)
+        .distinct()
+
+internal fun canonicalWitchToonsChapterUrl(url: String, baseUrl: String): String {
+    val uri = runCatching { URI(url) }.getOrElse {
+        throw IOException("DrakeComic returned an invalid chapter address")
+    }
+    val host = uri.host?.lowercase()
+    val allowedHost = host == "drakecomic.net" || host == "www.drakecomic.net" ||
+        host == "witchtoons.net" || host?.endsWith(".witchtoons.net") == true
+    val path = uri.rawPath.orEmpty()
+    if (uri.scheme !in setOf("http", "https") || !allowedHost ||
+        !path.matches(Regex("""/series/comic/[^/]+/chapter/[^/]+/?"""))) {
+        throw IOException("DrakeComic returned an invalid chapter address")
+    }
+    return baseUrl.trimEnd('/') + path + (uri.rawQuery?.let { "?$it" } ?: "")
+}
+
+internal fun parseWitchToonsPageUrls(html: String, baseUrl: String): List<String> {
+    val imageUrlPattern = Regex("""imageUrl\\?":\\?"((?:[^"\\]|\\u[0-9a-fA-F]{4})*)""")
+    val escapedUnicode = Regex("""\\u([0-9a-fA-F]{4})""")
+    return imageUrlPattern.findAll(html).mapNotNull { match ->
+        val rawUrl = escapedUnicode.replace(match.groupValues[1]) { escaped ->
+            escaped.groupValues[1].toInt(16).toChar().toString()
+        }.replace("\\/", "/").replace("\\\"", "\"").replace("\\\\", "\\")
+        val uri = runCatching { URI(baseUrl).resolve(rawUrl) }.getOrNull() ?: return@mapNotNull null
+        val path = uri.path.orEmpty()
+        val isLegacyPage = path.contains("/uploads/comic-pages/")
+        val isDrakePage = path.matches(
+            Regex("""/uploads/series/[^/]+/[^/]+/.+\.(?:avif|gif|jpe?g|png|webp)""", RegexOption.IGNORE_CASE)
+        )
+        uri.takeIf { isLegacyPage || isDrakePage }?.toString()
+    }.distinct().toList()
 }

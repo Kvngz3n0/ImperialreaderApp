@@ -21,6 +21,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.PopupMenu
+import android.widget.ScrollView
 import android.widget.TextView
 import android.view.WindowManager
 import coil.load
@@ -36,6 +37,8 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import com.google.android.material.checkbox.MaterialCheckBox
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
@@ -55,6 +58,7 @@ import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.ui.common.loadCover
 import com.imperialreader.ui.common.LibraryActions
 import com.imperialreader.ui.browse.GlobalSearchActivity
+import com.imperialreader.ui.main.MainActivity
 import com.imperialreader.ui.reader.GalleryPageSaver
 import com.imperialreader.ui.reader.ReaderActivity
 import com.imperialreader.ui.webview.WebViewActivity
@@ -84,7 +88,7 @@ private data class PendingMigrationConfirmation(
     val combinedMembers: List<CombinedSource.Member>?
 )
 
-class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
+class MangaDetailsActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_ID = "manga_id"
@@ -148,8 +152,8 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
 
         toolbar = findViewById(R.id.toolbar)
         toolbar.setTitleTextColor(Color.WHITE)
-        toolbar.setNavigationIconTint(getColor(R.color.gold))
-        toolbar.overflowIcon?.setTint(getColor(R.color.gold))
+        toolbar.setNavigationIconTint(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
+        toolbar.overflowIcon?.setTint(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
         toolbar.setNavigationOnClickListener { finish() }
         toolbar.inflateMenu(R.menu.details_menu)
         toolbar.setOnMenuItemClickListener { onMenu(it.itemId); true }
@@ -259,10 +263,11 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         }
         fab.visibility = View.VISIBLE
         val anyProgress = ordered.any { it.read || it.lastPageRead > 0 }
+        val anime = manga?.let { app.sources.get(it.source)?.isAnime } == true
         fab.text = when {
-            ordered.all { it.read } -> "Read again"
+            ordered.all { it.read } -> if (anime) "Watch again" else "Read again"
             anyProgress -> "Resume"
-            else -> "Start"
+            else -> if (anime) "Watch" else "Start"
         }
     }
 
@@ -368,10 +373,11 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
 
     private fun showMigrationSources() {
         val current = manga ?: return
+        val isWebNovel = BookSources.get(current.source)?.isWebNovel == true
         if (current.source == LOCAL_SOURCE_ID ||
-            (current.source != CombinedSource.ID && app.sources.get(current.source) == null)
+            (!isWebNovel && current.source != CombinedSource.ID && app.sources.get(current.source) == null)
         ) {
-            toast("This entry cannot be migrated to a manga source")
+            toast("This entry cannot be migrated to a compatible source")
             return
         }
 
@@ -427,6 +433,9 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             val padding = (20 * resources.displayMetrics.density).toInt()
             setPadding(padding, 0, padding, 0)
+            addView(TextView(this@MangaDetailsActivity).apply {
+                text = "${from.title} → ${target.title}"
+            })
             addView(chapters)
             addView(category)
             addView(history)
@@ -439,8 +448,7 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         }
         val dialog = MaterialAlertDialogBuilder(this)
             .setTitle("What to include?")
-            .setMessage("${from.title} → ${target.title}")
-            .setView(content)
+            .setView(ScrollView(this).apply { addView(content) })
             .setNeutralButton("Copy", null)
             .setPositiveButton("Migrate", null)
             .setNegativeButton("Cancel", null)
@@ -678,6 +686,18 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         lifecycleScope.launch { app.db.chapterDao().setRead(ids, read) }
     }
 
+    /** Anime sources only: ask for sub or dub before queuing; every other source passes null straight through. */
+    private fun withAudioChoice(m: MangaEntity, action: (dub: Boolean?) -> Unit) {
+        if (app.sources.get(m.source)?.isAnime != true) {
+            action(null)
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Download as")
+            .setItems(arrayOf("Sub", "Dub")) { _, which -> action(which == 1) }
+            .show()
+    }
+
     private fun showDownloadDialog() {
         val m = manga ?: return
         if (m.source == LOCAL_SOURCE_ID) {
@@ -700,7 +720,7 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle("Download")
             .setItems(options.map { it.first }.toTypedArray()) { _, which ->
-                enqueueChapters(m, options[which].second)
+                withAudioChoice(m) { dub -> enqueueChapters(m, options[which].second, dub) }
             }
             .show()
     }
@@ -712,18 +732,23 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             return
         }
         val selected = rows.map { it.chapter }.filter { it.id in selectedChapterIds }
-        enqueueChapters(m, selected)
-        clearChapterSelection()
+        withAudioChoice(m) { dub ->
+            enqueueChapters(m, selected, dub)
+            clearChapterSelection()
+        }
     }
 
-    private fun enqueueChapters(manga: MangaEntity, chapters: List<ChapterEntity>) {
-        val chosen = chapters.filterNot { it.downloaded }
+    private fun enqueueChapters(manga: MangaEntity, chapters: List<ChapterEntity>, dub: Boolean? = null) {
+        val chosen = if (dub != null) chapters else chapters.filterNot { it.downloaded }
         if (chosen.isEmpty()) {
             toast("Nothing to download")
             return
         }
-        app.downloads.enqueue(manga, chosen)
-        toast("Queued ${chosen.size} chapter(s)")
+        app.downloads.enqueue(manga, chosen, dub)
+        toast(
+            if (dub == null) "Queued ${chosen.size} chapter(s)"
+            else "Queued ${chosen.size} episode(s) (${if (dub) "dub" else "sub"})"
+        )
     }
 
     private fun deleteAllDownloads() {
@@ -782,8 +807,10 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
                 .show()
             m.source == LOCAL_SOURCE_ID -> toast("Local entries are already on your device")
             else -> {
-                app.downloads.enqueue(m, listOf(row.chapter))
-                toast("Queued")
+                withAudioChoice(m) { dub ->
+                    app.downloads.enqueue(m, listOf(row.chapter), dub)
+                    toast("Queued")
+                }
             }
         }
     }
@@ -838,6 +865,7 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         private var m: MangaEntity? = null
         private var count = 0
         private var expanded = false
+        private var genresExpanded = false
 
         fun update(manga: MangaEntity, chapterCount: Int) {
             m = manga
@@ -856,6 +884,19 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
             val btnWeb: MaterialButton = v.findViewById(R.id.btnWeb)
             val desc: TextView = v.findViewById(R.id.hDesc)
             val genres: TextView = v.findViewById(R.id.hGenres)
+            val genreChips = ChipGroup(v.context).also { group ->
+                val parent = genres.parent as ViewGroup
+                val index = parent.indexOfChild(genres)
+                parent.addView(group, index + 1, ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ))
+            }
+            val genreToggle = MaterialButton(v.context).also { button ->
+                val parent = genreChips.parent as ViewGroup
+                parent.addView(button, parent.indexOfChild(genreChips) + 1, ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ))
+            }
             val chapters: TextView = v.findViewById(R.id.hChapterCount)
         }
 
@@ -904,17 +945,48 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
                 expanded = !expanded
                 notifyItemChanged(0)
             }
-            h.genres.text = manga.genre.orEmpty()
-            h.genres.visibility = if (manga.genre.isNullOrBlank()) View.GONE else View.VISIBLE
-            h.chapters.text = "$count chapters"
-            h.title.setTextColor(getColor(R.color.on_surface))
-            h.author.setTextColor(getColor(R.color.on_surface_variant))
-            h.status.setTextColor(getColor(R.color.on_surface_variant))
-            h.desc.setTextColor(getColor(R.color.on_surface))
-            h.genres.setTextColor(getColor(R.color.gold_light))
-            h.chapters.setTextColor(getColor(R.color.on_surface))
-            h.btnLibrary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.gold))
-            h.btnWeb.backgroundTintList = ColorStateList.valueOf(getColor(R.color.gold))
+            h.genres.visibility = View.GONE
+            h.genreChips.removeAllViews()
+            val genreTags = manga.genre.orEmpty().split(',').map(String::trim).filter(String::isNotEmpty)
+                .distinctBy(String::lowercase)
+            val visibleGenres = if (genresExpanded) genreTags else genreTags.take(8)
+            visibleGenres.forEach { genre ->
+                    h.genreChips.addView(Chip(h.genreChips.context).apply {
+                        text = genre
+                        isClickable = true
+                        setOnClickListener {
+                            MaterialAlertDialogBuilder(this@MangaDetailsActivity)
+                                .setTitle(genre)
+                                .setItems(arrayOf("Copy", "Search library", "Search globally")) { _, choice ->
+                                    when (choice) {
+                                        0 -> {
+                                            getSystemService(ClipboardManager::class.java)
+                                                .setPrimaryClip(ClipData.newPlainText("Genre", genre))
+                                            toast("Genre copied")
+                                        }
+                                        1 -> startActivity(MainActivity.librarySearchIntent(this@MangaDetailsActivity, genre))
+                                        2 -> startActivity(GlobalSearchActivity.intent(this@MangaDetailsActivity, genre))
+                                    }
+                                }.show()
+                        }
+                    })
+                }
+            h.genreChips.visibility = if (h.genreChips.childCount == 0) View.GONE else View.VISIBLE
+            h.genreToggle.visibility = if (genreTags.size > 8) View.VISIBLE else View.GONE
+            h.genreToggle.text = if (genresExpanded) "Show less" else "Show more (${genreTags.size - 8})"
+            h.genreToggle.setOnClickListener {
+                genresExpanded = !genresExpanded
+                notifyItemChanged(0)
+            }
+            h.chapters.text = if (source?.isAnime == true) "$count episodes" else "$count chapters"
+            h.title.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurface))
+            h.author.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.status.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.desc.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurface))
+            h.genres.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorSecondary))
+            h.chapters.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurface))
+            h.btnLibrary.backgroundTintList = ColorStateList.valueOf(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
+            h.btnWeb.backgroundTintList = ColorStateList.valueOf(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
         }
     }
 
@@ -938,14 +1010,14 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
         val save = ImageButton(this).apply {
             contentDescription = "Save cover image"
             setImageResource(R.drawable.ic_download)
-            setColorFilter(getColor(R.color.gold))
+            setColorFilter(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
             val density = resources.displayMetrics.density
             val inset = (20 * density).toInt()
             setPadding(inset / 2, inset / 2, inset / 2, inset / 2)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(0xDD202020.toInt())
-                setStroke((2 * density).toInt(), getColor(R.color.gold))
+                setStroke((2 * density).toInt(), com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
             }
             setOnClickListener {
                 isEnabled = false
@@ -1018,10 +1090,10 @@ class MangaDetailsActivity : androidx.appcompat.app.AppCompatActivity() {
                 if (!c.read && c.lastPageRead > 0) "Page ${c.lastPageRead + 1}" else null
             ).joinToString(" • ")
             h.sub.alpha = if (c.read) 0.5f else 1f
-            h.sub.setTextColor(getColor(R.color.on_surface_variant))
-            h.options.setTextColor(getColor(R.color.on_surface_variant))
-            h.icon.setColorFilter(getColor(R.color.gold))
-            h.progress.setIndicatorColor(getColor(R.color.gold))
+            h.sub.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.options.setTextColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorOnSurfaceVariant))
+            h.icon.setColorFilter(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
+            h.progress.setIndicatorColor(com.imperialreader.ui.theme.AppThemeManager.color(this@MangaDetailsActivity, com.google.android.material.R.attr.colorPrimary))
 
             if (row.progress != null) {
                 h.progress.visibility = View.VISIBLE

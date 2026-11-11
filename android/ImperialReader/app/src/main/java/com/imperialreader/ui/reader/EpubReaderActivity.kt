@@ -25,6 +25,8 @@ import com.imperialreader.data.book.BookSources
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.LOCAL_SOURCE_ID
 import com.imperialreader.data.db.MangaEntity
+import com.imperialreader.data.repo.ReadingMediaKind
+import com.imperialreader.data.repo.ReadingSessionRecorder
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
 import kotlinx.coroutines.CancellationException
@@ -46,7 +48,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.math.abs
 
 /** Minimal EPUB reader: unzips to cache, follows the OPF spine and shows each section in a WebView. */
-class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
+class EpubReaderActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"
@@ -55,6 +57,17 @@ class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
             Intent(ctx, EpubReaderActivity::class.java)
                 .putExtra(EXTRA_CHAPTER, chapterId)
                 .putExtra(EXTRA_URI, uri)
+    }
+
+    private fun startReadingSession(entry: MangaEntity, targetChapterId: Long, startPage: Int) {
+        readingRecorder?.close()
+        lastTrackedPage = startPage
+        readingRecorder = ReadingSessionRecorder(
+            context = this,
+            mediaKind = ReadingMediaKind.NOVEL,
+            mangaId = entry.id,
+            chapterId = targetChapterId
+        ).also { if (readerResumed) it.onResume() }
     }
 
     private class Book(val title: String, val spine: List<File>, val titles: List<String>)
@@ -84,6 +97,9 @@ class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     private var touchStartY = 0f
     private var touchStartedNearEnd = false
     private var pendingNextChapterSwipe = false
+    private var readingRecorder: ReadingSessionRecorder? = null
+    private var readerResumed = false
+    private var lastTrackedPage = -1
     private lateinit var gesture: GestureDetector
     private lateinit var btnTts: com.google.android.material.button.MaterialButton
     private lateinit var btnReadingMode: com.google.android.material.button.MaterialButton
@@ -188,6 +204,8 @@ class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        readingRecorder?.close()
+        readingRecorder = null
         transientEpubFile?.let { file ->
             File(cacheDir, "epub/${Uri.fromFile(file).toString().hashCode()}").deleteRecursively()
             file.delete()
@@ -195,6 +213,23 @@ class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
         tts?.stop()
         tts?.shutdown()
         super.onDestroy()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        readerResumed = true
+        readingRecorder?.onResume()
+    }
+
+    override fun onPause() {
+        readerResumed = false
+        readingRecorder?.onPause()
+        super.onPause()
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        readingRecorder?.onUserInteraction()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -267,6 +302,10 @@ class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
                     }
                     txtSection.text = progressDescription(page, total, currentBook.titles[index])
                     val storedPage = if (currentBook.spine.size == 1) page else index
+                    if (lastTrackedPage >= 0 && storedPage > lastTrackedPage) {
+                        readingRecorder?.addUnits(storedPage - lastTrackedPage)
+                    }
+                    lastTrackedPage = storedPage
                     val chapterComplete = index == currentBook.spine.lastIndex && page >= total - 1 && atEnd
                     lifecycleScope.launch {
                         val dao = app.db.chapterDao()
@@ -384,6 +423,13 @@ class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
                 val startSection = if (loaded.spine.size == 1) 0
                 else if (chapter != null && !chapter.read) chapter.lastPageRead.coerceIn(0, loaded.spine.lastIndex)
                 else 0
+                currentManga?.let {
+                    startReadingSession(
+                        it,
+                        chapterId,
+                        if (loaded.spine.size == 1) pendingResumePage else startSection
+                    )
+                }
                 show(startSection)
             } catch (e: CancellationException) {
                 throw e
@@ -527,6 +573,7 @@ class EpubReaderActivity : androidx.appcompat.app.AppCompatActivity() {
                 chapterId = target.id
                 epubChapterIndex = targetIndex
                 book = loaded
+                startReadingSession(currentManga, target.id, if (startSection == Int.MAX_VALUE) loaded.spine.lastIndex else startSection)
                 pendingEndPosition = startSection == Int.MAX_VALUE
                 pendingResumePage = 0
                 findViewById<MaterialToolbar>(R.id.toolbar).title = manga?.title ?: loaded.title

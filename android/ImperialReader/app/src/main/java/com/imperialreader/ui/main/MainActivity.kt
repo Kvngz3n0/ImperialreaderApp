@@ -2,6 +2,8 @@ package com.imperialreader.ui.main
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -14,7 +16,10 @@ import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.data.update.AutomaticAppUpdateScheduler
 import com.imperialreader.data.update.LibraryUpdateScheduler
+import com.imperialreader.ui.common.CascadeAnimations
 import com.imperialreader.ui.common.StartupStarAnimation
+import com.imperialreader.ui.common.LibraryTransitions
+import com.imperialreader.ui.common.transitionDirection
 import com.imperialreader.util.app
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -28,12 +33,18 @@ import com.imperialreader.ui.library.LibraryFragment
 import com.imperialreader.ui.more.MoreFragment
 import com.imperialreader.ui.updates.UpdatesFragment
 
-class MainActivity : androidx.appcompat.app.AppCompatActivity() {
+class MainActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
     private var startupAnimationPending = false
 
     companion object {
+        private const val EXTRA_LIBRARY_GENRE = "library_genre"
         private var refreshedThisProcess = false
         private var scannedThisProcess = false
+
+        fun librarySearchIntent(context: Context, genre: String): Intent =
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(EXTRA_LIBRARY_GENRE, genre)
     }
 
     private val notificationPermission =
@@ -120,6 +131,18 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
         } else {
             show(nav.selectedItemId)
         }
+        val genre = intent.getStringExtra(EXTRA_LIBRARY_GENRE)
+        if (genre != null) {
+            intent.removeExtra(EXTRA_LIBRARY_GENRE)
+            nav.selectedItemId = R.id.nav_library
+            (supportFragmentManager.findFragmentByTag(R.id.nav_library.toString()) as? LibraryFragment)
+                ?.searchGenre(genre)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 
     private fun markUpdatesSeen() {
@@ -140,11 +163,27 @@ class MainActivity : androidx.appcompat.app.AppCompatActivity() {
         val tag = id.toString()
         val visibleFragments = fm.fragments.filterNot { it.isHidden }
         if (visibleFragments.size == 1 && visibleFragments.single().tag == tag) return
+        if (fm.isStateSaved) return
+        val previous = visibleFragments.singleOrNull()?.tag?.toIntOrNull()
+        val libraryTransition = previous != null && previous != id && LibraryTransitions.enabled(this)
+        val nav = findViewById<BottomNavigationView>(R.id.nav)
+        val fromIndex = (0 until nav.menu.size()).firstOrNull { nav.menu.getItem(it).itemId == previous } ?: 0
+        val toIndex = (0 until nav.menu.size()).firstOrNull { nav.menu.getItem(it).itemId == id } ?: 0
         val tx = fm.beginTransaction()
-        tx.setCustomAnimations(R.anim.fade_in, R.anim.fade_out)
+        if (!libraryTransition) tx.setCustomAnimations(R.anim.fade_in, R.anim.fade_out)
         fm.fragments.forEach { tx.hide(it) }
         val existing = fm.findFragmentByTag(tag)
         if (existing == null) tx.add(R.id.container, create(id), tag) else tx.show(existing)
-        if (!fm.isStateSaved) tx.commitNow()
+        tx.commitNow()
+        if (libraryTransition) {
+            val shown = fm.findFragmentByTag(tag)?.view
+            if (shown != null) {
+                if (!LibraryTransitions.isCascade(this)) {
+                    LibraryTransitions.enter(shown, transitionDirection(fromIndex, toIndex))
+                } else if (id != R.id.nav_library) {
+                    CascadeAnimations.animateContent(shown)
+                }
+            }
+        }
     }
 }

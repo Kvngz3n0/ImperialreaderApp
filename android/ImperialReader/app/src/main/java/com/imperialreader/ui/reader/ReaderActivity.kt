@@ -3,6 +3,9 @@ package com.imperialreader.ui.reader
 import android.content.Context
 import android.content.Intent
 import android.graphics.Rect
+import android.media.AudioAttributes
+import android.media.MediaPlayer
+import android.net.Uri
 import android.os.Bundle
 import android.view.GestureDetector
 import android.view.KeyEvent
@@ -30,7 +33,10 @@ import com.imperialreader.data.AppPrefs
 import com.imperialreader.data.db.ChapterEntity
 import com.imperialreader.data.db.MangaEntity
 import com.imperialreader.data.network.CloudflareException
+import com.imperialreader.data.repo.ReadingMediaKind
+import com.imperialreader.data.repo.ReadingSessionRecorder
 import com.imperialreader.ui.common.StarSpriteView
+import com.imperialreader.ui.player.AnimePlayerActivity
 import com.imperialreader.ui.webview.WebViewActivity
 import com.imperialreader.util.app
 import com.imperialreader.util.toast
@@ -40,7 +46,7 @@ import kotlinx.coroutines.launch
 import java.io.IOException
 import kotlin.math.abs
 
-class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
+class ReaderActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
 
     companion object {
         private const val EXTRA_CHAPTER = "chapter_id"
@@ -61,6 +67,7 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     private lateinit var title: TextView
     private lateinit var subtitle: TextView
     private lateinit var btnMode: MaterialButton
+    private lateinit var btnEpisodeAudio: MaterialButton
     private lateinit var nextChapterPrompt: LinearLayout
     private lateinit var nextChapterStar: StarSpriteView
     private lateinit var nextChapterMessage: TextView
@@ -75,12 +82,18 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     private var headers: Map<String, String> = emptyMap()
     private var currentPage = 0
     private var pageZoomed = false
+    private var episodeAudioUrl: String? = null
+    private var audioPlayer: MediaPlayer? = null
+    private var audioPrepared = false
     private var mode = AppPrefs.READER_RTL
     private var overlaysVisible = false
     private var restoring = false
     private var chapterTransitionActive = false
     private var loadJob: Job? = null
     private var pendingSaveBitmap: android.graphics.Bitmap? = null
+    private var readingRecorder: ReadingSessionRecorder? = null
+    private var readerResumed = false
+    private var lastTrackedPage = -1
     private val requestGalleryPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             val bitmap = pendingSaveBitmap
@@ -113,6 +126,7 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
         title = findViewById(R.id.readerTitle)
         subtitle = findViewById(R.id.readerSubtitle)
         btnMode = findViewById(R.id.btnMode)
+        btnEpisodeAudio = findViewById(R.id.btnEpisodeAudio)
         nextChapterPrompt = findViewById(R.id.nextChapterPrompt)
         nextChapterStar = findViewById(R.id.nextChapterStar)
         nextChapterMessage = findViewById(R.id.nextChapterMessage)
@@ -137,6 +151,7 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
         findViewById<ImageButton>(R.id.btnPrevCh).setOnClickListener { openAdjacent(-1) }
         findViewById<ImageButton>(R.id.btnNextCh).setOnClickListener { openAdjacent(1) }
         btnMode.setOnClickListener { showModeDialog() }
+        btnEpisodeAudio.setOnClickListener { toggleEpisodeAudio() }
         nextChapterPrompt.setOnClickListener { openAdjacent(1) }
 
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -214,6 +229,9 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     // ------------------------------------------------------------------ loading
 
     private fun loadChapter(chapterId: Long, startPage: Int?) {
+        readingRecorder?.close()
+        readingRecorder = null
+        setEpisodeAudio(null)
         currentChapterId = chapterId
         loadJob?.cancel()
         loadJob = lifecycleScope.launch {
@@ -222,6 +240,11 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
                 val chapterDao = app.db.chapterDao()
                 val ch = chapterDao.getById(chapterId) ?: throw IOException("Chapter not found")
                 val m = app.db.mangaDao().getById(ch.mangaId) ?: throw IOException("Manga not found")
+                if (app.sources.get(m.source)?.isAnime == true) {
+                    startActivity(AnimePlayerActivity.intent(this@ReaderActivity, chapterId))
+                    finish()
+                    return@launch
+                }
                 manga = m
                 mode = app.prefs.readerModeFor(m.id)
                 chapters = chapterDao.getAll(m.id).sortedByDescending { it.sourceOrder }
@@ -244,11 +267,13 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
                     is LoadedChapter.Images -> {
                         pages = loaded.pages
                         headers = loaded.headers
+                        setEpisodeAudio(loaded.audioUrl)
                     }
                 }
                 app.repo.recordHistory(current.id)
                 val start = startPage ?: if (current.read) 0 else current.lastPageRead
                 applyPages(start.coerceIn(0, pages.lastIndex))
+                startReadingSession(m, current.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -288,20 +313,26 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
         progressBar.visibility = View.GONE
         errorView.visibility = View.GONE
         restoring = true
-        val adapter = PageAdapter(headers, webtoon = !pagerMode, onSavePage = { image, pageUrl ->
-            if (image.drawable == null) toast("Wait for the page to finish loading before saving it")
-            else lifecycleScope.launch {
-                try {
-                    confirmSavePage(GalleryPageSaver.loadPageBitmap(this@ReaderActivity, pageUrl, headers))
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    toast("Could not load the selected page: ${e.message}")
+        val adapter = PageAdapter(
+            headers,
+            webtoon = !pagerMode,
+            sourceId = manga?.source.orEmpty(),
+            onSavePage = { image, pageUrl ->
+                if (image.drawable == null) toast("Wait for the page to finish loading before saving it")
+                else lifecycleScope.launch {
+                    try {
+                        confirmSavePage(GalleryPageSaver.loadPageBitmap(this@ReaderActivity, pageUrl, headers))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        toast("Could not load the selected page: ${e.message}")
+                    }
                 }
+            },
+            onZoomChanged = { position, zoomed ->
+                if (position == currentPage) pageZoomed = zoomed
             }
-        }, onZoomChanged = { position, zoomed ->
-            if (position == currentPage) pageZoomed = zoomed
-        })
+        )
         adapter.pages = pages
         adapter.setActivePage(start)
         pageAdapter = adapter
@@ -369,6 +400,11 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
 
     private fun onPageChanged(position: Int) {
         if (position < 0 || position >= pages.size) return
+        val previousTrackedPage = lastTrackedPage
+        lastTrackedPage = position
+        if (previousTrackedPage >= 0 && position > previousTrackedPage) {
+            readingRecorder?.addUnits(position - previousTrackedPage)
+        }
         pageAdapter?.setActivePage(position)
         if (position != currentPage) {
             pageZoomed = false
@@ -388,13 +424,33 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
     }
 
     override fun onPause() {
-        pageAdapter?.pausePawchiveVideo()
+        readerResumed = false
+        readingRecorder?.onPause()
+        pageAdapter?.pauseVideo()
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
-        pageAdapter?.resumePawchiveVideo()
+        readerResumed = true
+        readingRecorder?.onResume()
+        pageAdapter?.resumeVideo()
+    }
+
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        readingRecorder?.onUserInteraction()
+    }
+
+    private fun startReadingSession(entry: MangaEntity, chapterId: Long) {
+        readingRecorder?.close()
+        lastTrackedPage = currentPage
+        readingRecorder = ReadingSessionRecorder(
+            context = this,
+            mediaKind = ReadingMediaKind.MANGA,
+            mangaId = entry.id,
+            chapterId = chapterId
+        ).also { if (readerResumed) it.onResume() }
     }
 
     private fun updateNextChapterPrompt() {
@@ -552,6 +608,101 @@ class ReaderActivity : androidx.appcompat.app.AppCompatActivity() {
         AppPrefs.READER_LTR -> "Left to right"
         AppPrefs.READER_VERTICAL -> "Vertical (webtoon)"
         else -> "Right to left"
+    }
+
+    private fun setEpisodeAudio(url: String?) {
+        releaseEpisodeAudio()
+        episodeAudioUrl = url
+        btnEpisodeAudio.visibility = if (url == null) View.GONE else View.VISIBLE
+        btnEpisodeAudio.text = "♫ Play episode audio"
+    }
+
+    private fun toggleEpisodeAudio() {
+        val url = episodeAudioUrl ?: return
+        val player = audioPlayer
+        if (player != null) {
+            if (!audioPrepared) return
+            if (player.isPlaying) {
+                player.pause()
+                btnEpisodeAudio.text = "♫ Play episode audio"
+            } else {
+                player.start()
+                btnEpisodeAudio.text = "♫ Pause episode audio"
+            }
+            return
+        }
+
+        val newPlayer = MediaPlayer()
+        audioPlayer = newPlayer
+        try {
+            newPlayer.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            newPlayer.setDataSource(
+                this,
+                Uri.parse(url),
+                mapOf(
+                    "Referer" to "https://m.webtoons.com/",
+                    "User-Agent" to app.network.userAgent
+                )
+            )
+            newPlayer.setOnPreparedListener { prepared ->
+                if (audioPlayer === prepared && !isFinishing) {
+                    audioPrepared = true
+                    prepared.start()
+                    btnEpisodeAudio.text = "♫ Pause episode audio"
+                }
+            }
+            newPlayer.setOnCompletionListener { completed ->
+                if (audioPlayer === completed) {
+                    releaseEpisodeAudio()
+                    btnEpisodeAudio.text = "♫ Play episode audio"
+                }
+            }
+            newPlayer.setOnErrorListener { failed, _, _ ->
+                if (audioPlayer === failed) {
+                    releaseEpisodeAudio()
+                    btnEpisodeAudio.text = "♫ Play episode audio"
+                    toast("Could not play this episode's audio")
+                }
+                true
+            }
+            btnEpisodeAudio.text = "Loading episode audio…"
+            newPlayer.prepareAsync()
+        } catch (e: Exception) {
+            releaseEpisodeAudio()
+            btnEpisodeAudio.text = "♫ Play episode audio"
+            toast("Could not play this episode's audio: ${e.message}")
+        }
+    }
+
+    private fun releaseEpisodeAudio() {
+        audioPlayer?.let { player ->
+            runCatching { player.stop() }
+            player.release()
+        }
+        audioPlayer = null
+        audioPrepared = false
+    }
+
+    override fun onStop() {
+        audioPlayer?.let { player ->
+            if (audioPrepared && player.isPlaying) {
+                player.pause()
+                btnEpisodeAudio.text = "♫ Play episode audio"
+            }
+        }
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        readingRecorder?.close()
+        readingRecorder = null
+        releaseEpisodeAudio()
+        super.onDestroy()
     }
 
     private fun showModeDialog() {

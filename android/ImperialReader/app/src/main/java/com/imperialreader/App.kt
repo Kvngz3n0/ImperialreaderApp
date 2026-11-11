@@ -1,7 +1,9 @@
 package com.imperialreader
 
 import android.app.Application
+import android.app.Activity
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
 import coil.ImageLoader
 import coil.ImageLoaderFactory
@@ -18,6 +20,8 @@ import com.imperialreader.data.source.SourceManager
 import com.imperialreader.data.storage.StorageManager
 import com.imperialreader.data.update.LibraryRefreshConcurrencyController
 import com.imperialreader.security.AppLockManager
+import com.imperialreader.ui.theme.AppThemeManager
+import com.imperialreader.ui.common.CascadeAnimations
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,7 +56,29 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        prefs
+        AppThemeManager.initialize(this)
         registerActivityLifecycleCallbacks(appLockManager)
+        registerActivityLifecycleCallbacks(CascadeAnimations())
+        var startedActivities = 0
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+
+            override fun onActivityStarted(activity: Activity) {
+                startedActivities++
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivities = (startedActivities - 1).coerceAtLeast(0)
+                if (startedActivities == 0 && !activity.isChangingConfigurations) {
+                    downloads.pauseAll()
+                }
+            }
+        })
         applicationScope.launch {
             try {
                 AutomaticBackupScheduler.schedule(applicationContext)

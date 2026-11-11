@@ -64,6 +64,12 @@ class DownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        app.downloads.pauseAll()
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         scope.cancel()
         super.onDestroy()

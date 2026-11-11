@@ -15,7 +15,7 @@ data class SManga(
     var artist: String? = null,
     var description: String? = null,
     var genre: String? = null,
-    /** 0 unknown, 1 ongoing, 2 completed, 3 hiatus/cancelled */
+    /** 0 unknown, 1 ongoing, 2 completed, 3 hiatus, 4 axed/cancelled */
     var status: Int = 0
 )
 
@@ -30,7 +30,19 @@ data class SChapter(
 data class MangasPage(val mangas: List<SManga>, val hasNextPage: Boolean)
 
 /** Page image URLs plus the headers needed to load them (they can differ per chapter for combined titles). */
-data class ChapterPages(val urls: List<String>, val headers: Map<String, String>)
+data class ChapterPages(
+    val urls: List<String>,
+    val headers: Map<String, String>,
+    val audioUrl: String? = null
+)
+
+/** One way to watch an episode (e.g. a SUB or DUB server). The stream is only resolved when the option is picked. */
+data class VideoOption(
+    val label: String,
+    val dub: Boolean,
+    val useWebView: Boolean = false,
+    val resolve: suspend () -> ChapterPages
+)
 
 /** Contract every built-in or custom source implements. */
 interface Source {
@@ -42,8 +54,16 @@ interface Source {
     /** Adult (18+) site: hidden unless "Show 18+" is enabled in Settings. */
     val nsfw: Boolean get() = false
 
+    /** Video source: a title is an anime and its "chapters" are episodes. Only changes wording and the player. */
+    val isAnime: Boolean get() = false
+
+    /** Sources with a direct gallery tab can show posts without first opening an entry page. */
+    val supportsGeneralBrowse: Boolean get() = false
+    suspend fun galleryMediaType(manga: SManga): String? = null
+
     suspend fun getPopular(page: Int): MangasPage
     suspend fun getLatest(page: Int): MangasPage
+    suspend fun getGeneral(page: Int): MangasPage = getLatest(page)
     suspend fun search(query: String, page: Int): MangasPage
     suspend fun getMangaDetails(manga: SManga): SManga
     suspend fun searchByAuthor(query: String, page: Int): MangasPage {
@@ -92,6 +112,15 @@ interface Source {
         return MangasPage(matches, popular.hasNextPage)
     }
     suspend fun getChapters(manga: SManga): List<SChapter>
+
+    /** Anime sources: the sub/dub servers of one episode. Empty = fall back to [loadPages]. */
+    suspend fun getVideoOptions(chapter: SChapter): List<VideoOption> = emptyList()
+
+    /**
+     * Anime sources: a DIRECT stream (.m3u8 or .mp4 plus headers) of one episode in the requested language, used by
+     * downloads. Players can show an embed page, but a download needs the real media file. null = not supported.
+     */
+    suspend fun resolveDownload(chapter: SChapter, dub: Boolean): ChapterPages? = null
     suspend fun getPages(chapter: SChapter): List<String>
 
     /** Same as [getPages] but also returns the image headers. Combined sources override this. */

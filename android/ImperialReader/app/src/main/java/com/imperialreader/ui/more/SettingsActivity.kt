@@ -16,14 +16,23 @@ import com.imperialreader.R
 import com.imperialreader.data.cover.AutomaticCoverRefreshScheduler
 import com.imperialreader.data.update.AutomaticAppUpdateScheduler
 import com.imperialreader.data.update.LibraryUpdateScheduler
+import com.imperialreader.ui.theme.ThemeEditorActivity
 import com.imperialreader.util.toast
 import kotlinx.coroutines.launch
 
-class SettingsActivity : androidx.appcompat.app.AppCompatActivity() {
+class SettingsActivity : com.imperialreader.ui.theme.ThemedAppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
-        findViewById<MaterialToolbar>(R.id.toolbar).setNavigationOnClickListener { finish() }
+        val toolbar = findViewById<MaterialToolbar>(R.id.toolbar)
+        toolbar.setNavigationOnClickListener {
+            if (supportFragmentManager.backStackEntryCount > 0) supportFragmentManager.popBackStack()
+            else finish()
+        }
+        supportFragmentManager.addOnBackStackChangedListener {
+            toolbar.title = if (supportFragmentManager.backStackEntryCount > 0) "Manage Categories" else "Settings"
+        }
+        toolbar.title = if (supportFragmentManager.backStackEntryCount > 0) "Manage Categories" else "Settings"
         if (savedInstanceState == null) {
             supportFragmentManager.beginTransaction()
                 .replace(R.id.settingsContainer, SettingsFragment())
@@ -35,6 +44,28 @@ class SettingsActivity : androidx.appcompat.app.AppCompatActivity() {
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.preferences, rootKey)
             val ctx = requireContext()
+
+            findPreference<Preference>("manage_categories")?.setOnPreferenceClickListener {
+                parentFragmentManager.beginTransaction()
+                    .replace(R.id.settingsContainer, CategoryManagementFragment())
+                    .addToBackStack(null)
+                    .commit()
+                true
+            }
+
+            findPreference<ListPreference>("library_transition_style")?.apply {
+                entries = arrayOf("Fade", "Slide horizontally", "Fade and slide", "Cascade")
+                entryValues = arrayOf("fade", "slide", "fade_slide", "cascade")
+            }
+
+            findPreference<Preference>("custom_themes")?.setOnPreferenceClickListener {
+                startActivity(android.content.Intent(ctx, ThemeEditorActivity::class.java))
+                true
+            }
+            findPreference<Preference>("reading_monitor")?.setOnPreferenceClickListener {
+                startActivity(android.content.Intent(ctx, ReadingMonitorActivity::class.java))
+                true
+            }
 
             findPreference<Preference>("version")?.summary = runCatching {
                 ctx.packageManager.getPackageInfo(ctx.packageName, 0).versionName

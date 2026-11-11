@@ -15,6 +15,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.room.withTransaction
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.DefaultItemAnimator
 import androidx.recyclerview.widget.RecyclerView
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.android.material.appbar.MaterialToolbar
@@ -27,10 +28,15 @@ import com.imperialreader.data.db.LibraryItem
 import com.imperialreader.data.update.LibraryRefreshNotification
 import com.imperialreader.ui.browse.GlobalSearchActivity
 import com.imperialreader.ui.common.CardItem
+import com.imperialreader.ui.common.CascadeAnimations
 import com.imperialreader.ui.common.LibraryActions
+import com.imperialreader.ui.common.LibraryTransitions
+import com.imperialreader.ui.common.transitionDirection
 import com.imperialreader.ui.common.MangaCardAdapter
 import com.imperialreader.ui.common.StarSpriteView
 import com.imperialreader.ui.details.MangaDetailsActivity
+import com.imperialreader.ui.details.MassMigrationActivity
+import com.imperialreader.ui.more.categoryNameError
 import com.imperialreader.util.app
 import com.imperialreader.util.dp
 import com.imperialreader.util.toast
@@ -51,6 +57,8 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private var visibleItems: List<LibraryItem> = emptyList()
     private var selectionMode = false
     private var libraryRefreshInProgress = false
+    private var initialCascadePending = true
+    private var pendingCategoryTransition: Pair<Long, Int>? = null
     private val selectedIds = linkedSetOf<Long>()
 
     private lateinit var adapter: MangaCardAdapter
@@ -58,6 +66,14 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     private lateinit var tabs: TabLayout
     private lateinit var sprite: StarSpriteView
     private lateinit var toolbar: MaterialToolbar
+
+    fun searchGenre(genre: String) {
+        val searchItem = toolbar.menu.findItem(R.id.action_search)
+        searchItem.expandActionView()
+        val search = searchItem.actionView as SearchView
+        search.setQuery("genre:\"${genre.replace("\"", "")}\"", false)
+        search.clearFocus()
+    }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
@@ -71,6 +87,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         val emptyText = view.findViewById<TextView>(R.id.emptyText)
         val btnGlobal = view.findViewById<Button>(R.id.btnGlobalSearch)
         recycler = view.findViewById(R.id.recycler)
+        CascadeAnimations.registerLibrary(recycler)
         tabs = view.findViewById(R.id.categoryTabs)
         sprite = view.findViewById(R.id.updateSprite)
 
@@ -96,6 +113,25 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         )
         recycler.layoutManager = GridLayoutManager(requireContext(), prefs.libraryColumns)
         recycler.adapter = adapter
+        recycler.itemAnimator = object : DefaultItemAnimator() {
+            init {
+                supportsChangeAnimations = false
+                addDuration = 220
+                removeDuration = 220
+            }
+
+            override fun animateMove(holder: RecyclerView.ViewHolder, fromX: Int, fromY: Int, toX: Int, toY: Int): Boolean {
+                dispatchMoveFinished(holder)
+                return false
+            }
+
+            override fun onAddFinished(item: RecyclerView.ViewHolder) {
+                val position = item.bindingAdapterPosition
+                if (position != RecyclerView.NO_POSITION) {
+                    item.itemView.alpha = if (adapter.currentList.getOrNull(position)?.dim == true) 0.5f else 1f
+                }
+            }
+        }
         val categorySwipe = GestureDetector(requireContext(), object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
 
@@ -132,7 +168,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
         toolbar.inflateMenu(R.menu.library_menu)
         val searchView = toolbar.menu.findItem(R.id.action_search).actionView as SearchView
-        searchView.queryHint = "Search library"
+        searchView.queryHint = "Search title, author, genre or source"
         searchView.setOnQueryTextListener(object : SearchView.OnQueryTextListener {
             override fun onQueryTextSubmit(q: String?): Boolean {
                 val text = q.orEmpty().trim()
@@ -151,7 +187,6 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             when (item.itemId) {
                 R.id.action_filter -> showFilterDialog()
                 R.id.action_sort -> showSortDialog()
-                R.id.action_categories -> manageCategories()
                 R.id.action_select -> if (selectionMode) cancelSelection() else {
                     selectionMode = true
                     updateSelectionMenu()
@@ -160,6 +195,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                 R.id.action_bulk_category -> moveSelectedToCategory()
                 R.id.action_bulk_read -> markSelectedAsRead()
                 R.id.action_bulk_unread -> markSelectedAsUnread()
+                R.id.action_bulk_migrate -> migrateSelected()
                 R.id.action_bulk_remove -> confirmRemoveSelected()
                 R.id.action_cancel_selection -> cancelSelection()
             }
@@ -202,7 +238,35 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
                     }.collect { (all, q, shown) ->
                         shownCount = shown.size
                         visibleItems = shown
-                        adapter.submitList(shown.map { toCard(it) })
+                        val firstEntrance = initialCascadePending && shown.isNotEmpty()
+                        val owner = viewLifecycleOwner
+                        val target = recycler
+                        adapter.submitList(shown.map { toCard(it) }) {
+                            if (firstEntrance && initialCascadePending &&
+                                owner.lifecycle.currentState.isAtLeast(Lifecycle.State.CREATED)
+                            ) {
+                                initialCascadePending = false
+                                CascadeAnimations.animateLibrary(target)
+                            }
+                            val pending = pendingCategoryTransition
+                            if (pending != null && pending.first == selectedCategory.value &&
+                                owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                            ) {
+                                pendingCategoryTransition = null
+                                swipe.post {
+                                    if (owner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
+                                        selectedCategory.value == pending.first
+                                    ) {
+                                        if (LibraryTransitions.isCascade(requireContext())) {
+                                            CascadeAnimations.animateLibrary(target, force = true)
+                                        } else {
+                                            LibraryTransitions.enter(swipe, pending.second)
+                                        }
+                                        LibraryTransitions.enter(emptyView, pending.second)
+                                    }
+                                }
+                            }
+                        }
                         updateSelectionMenu()
                         emptyView.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
                         when {
@@ -232,6 +296,13 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         updateSelectionMenu()
     }
 
+    override fun onHiddenChanged(hidden: Boolean) {
+        super.onHiddenChanged(hidden)
+        if (!hidden && !initialCascadePending && view != null) {
+            CascadeAnimations.animateLibrary(recycler, LibraryTransitions.isCascade(requireContext()))
+        }
+    }
+
     // ---------------------------------------------------------------- categories
 
     private fun rebuildTabs(list: List<CategoryEntity>) {
@@ -252,6 +323,13 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
     }
 
     private fun setSelectedCategory(categoryId: Long) {
+        val previous = selectedCategory.value
+        if (previous != categoryId) {
+            val filters = listOf(-1L, 0L) + categories.map { it.id }
+            val from = filters.indexOf(previous).coerceAtLeast(0)
+            val to = filters.indexOf(categoryId).coerceAtLeast(0)
+            pendingCategoryTransition = categoryId to transitionDirection(from, to)
+        }
         selectedCategory.value = categoryId
         requireContext().app.prefs.libraryCategory = categoryId
     }
@@ -267,18 +345,6 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         if (categoryId == -1L) tabs.selectTab(null) else tabs.selectTab(tabs.getTabAt(target - 1))
         rebuildingTabs = false
         setSelectedCategory(categoryId)
-    }
-
-    private fun manageCategories() {
-        val ctx = requireContext()
-        val names = categories.map { it.name }.toTypedArray() + "＋ New category"
-        MaterialAlertDialogBuilder(ctx)
-            .setTitle("Categories")
-            .setItems(names) { _, which ->
-                if (which == categories.size) askCategoryName(null) else categoryOptions(categories[which])
-            }
-            .setPositiveButton("Close", null)
-            .show()
     }
 
     private fun categoryOptions(category: CategoryEntity) {
@@ -348,23 +414,54 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             setPadding(ctx.dp(24), ctx.dp(8), ctx.dp(24), 0)
             addView(input, LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         }
-        MaterialAlertDialogBuilder(ctx)
+        val dialog = MaterialAlertDialogBuilder(ctx)
             .setTitle(if (existing == null) "New category" else "Rename category")
             .setView(box)
-            .setPositiveButton("Save") { _, _ ->
-                val name = input.text.toString().trim()
-                if (name.isBlank()) return@setPositiveButton
+            .setPositiveButton("Save", null)
+            .setNegativeButton("Cancel", null)
+            .create()
+        dialog.setOnShowListener {
+            val button = dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)
+            button.setOnClickListener {
+                button.isEnabled = false
                 viewLifecycleOwner.lifecycleScope.launch {
-                    val dao = ctx.app.db.categoryDao()
-                    if (existing == null) {
-                        val nextOrder = (categories.maxOfOrNull { it.sortOrder } ?: -1) + 1
-                        dao.insert(CategoryEntity(name = name, sortOrder = nextOrder))
+                    try {
+                        val db = ctx.app.db
+                        val name = input.text.toString().trim()
+                        val error = db.withTransaction {
+                            val dao = db.categoryDao()
+                            val current = dao.getAll()
+                            val validation = categoryNameError(name, current, existing?.id)
+                            val category = existing?.let { old -> current.firstOrNull { it.id == old.id } }
+                            when {
+                                validation != null -> validation
+                                existing != null && category == null -> "This category no longer exists"
+                                category != null -> {
+                                    dao.update(category.copy(name = name))
+                                    null
+                                }
+                                else -> {
+                                    current.forEachIndexed { order, item -> dao.setSortOrder(item.id, order) }
+                                    dao.insert(CategoryEntity(name = name, sortOrder = current.size))
+                                    null
+                                }
+                            }
+                        }
+                        if (error == null) dialog.dismiss() else {
+                            input.error = error
+                            button.isEnabled = true
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        android.util.Log.e("LibraryFragment", "Could not save category", e)
+                        ctx.toast("Could not save category")
+                        button.isEnabled = true
                     }
-                    else dao.update(existing.copy(name = name))
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
+        dialog.show()
     }
 
     // ---------------------------------------------------------------- long-press menu
@@ -381,7 +478,6 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
         menu.findItem(R.id.action_search)?.isVisible = !selecting
         menu.findItem(R.id.action_filter)?.isVisible = !selecting
         menu.findItem(R.id.action_sort)?.isVisible = !selecting
-        menu.findItem(R.id.action_categories)?.isVisible = !selecting
         menu.findItem(R.id.action_select)?.isVisible = !selecting
         menu.findItem(R.id.action_select_all)?.apply {
             isVisible = selecting
@@ -397,6 +493,7 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
             title = "Mark selected as read"
         }
         menu.findItem(R.id.action_bulk_unread)?.isVisible = selecting && selectedIds.isNotEmpty()
+        menu.findItem(R.id.action_bulk_migrate)?.isVisible = selecting && selectedIds.isNotEmpty()
         menu.findItem(R.id.action_bulk_remove)?.isVisible = selecting && selectedIds.isNotEmpty()
         menu.findItem(R.id.action_cancel_selection)?.isVisible = selecting
     }
@@ -472,6 +569,13 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private fun markSelectedAsUnread() {
         markSelectedReadState(false)
+    }
+
+    private fun migrateSelected() {
+        val ids = selectedIds.toList()
+        if (ids.isEmpty()) return
+        startActivity(MassMigrationActivity.intent(requireContext(), ids))
+        cancelSelection()
     }
 
     private fun markSelectedReadState(read: Boolean) {
@@ -564,7 +668,15 @@ class LibraryFragment : Fragment(R.layout.fragment_library) {
 
     private fun process(items: List<LibraryItem>, q: String, category: Long): List<LibraryItem> {
         val prefs = requireContext().app.prefs
-        var list = items.filter { q.isBlank() || it.manga.title.contains(q, ignoreCase = true) }
+        val parsed = LibraryQuery.parse(q)
+        val sourceManager = requireContext().app.sources
+        var list = if (parsed.isBlank) items else items.filter { item ->
+            val m = item.manga
+            val sourceName = sourceManager.get(m.source)?.name
+                ?: com.imperialreader.data.book.BookSources.get(m.source)?.name
+                ?: if (m.source == LOCAL_SOURCE_ID) "Local" else m.source
+            parsed.matches(m.title, m.author, m.artist, m.genre, sourceName, m.source)
+        }
         if (category >= 0) list = list.filter { it.manga.categoryId == category }
         fun filter(mode: Int, matches: (LibraryItem) -> Boolean) {
             when (mode) {

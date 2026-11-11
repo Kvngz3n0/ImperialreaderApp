@@ -5,11 +5,20 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import androidx.preference.PreferenceManager
 
+internal fun defaultCascadingAnimations(hasPreferences: Boolean, hasDatabase: Boolean): Boolean =
+    !hasPreferences && !hasDatabase
+
 class AppPrefs(context: Context) {
 
     val sp: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
     init {
+        if (!sp.contains("cascading_animations")) {
+            val enabled = defaultCascadingAnimations(
+                sp.all.isNotEmpty(), context.getDatabasePath("imperial_reader.db").exists()
+            )
+            sp.edit { putBoolean("cascading_animations", enabled) }
+        }
         sp.edit()
             .remove("app_theme")
             .remove("pixel_style")
@@ -87,7 +96,11 @@ class AppPrefs(context: Context) {
         get() = sp.getBoolean("skip_duplicate_chapters_and_gaidens", false)
     val showNsfwExtensions: Boolean get() = sp.getBoolean("show_nsfw_ext", false)
 
+    val showBrowseEntryCount: Boolean get() = sp.getBoolean("show_browse_entry_count", false)
+
     val libraryColumns: Int get() = sp.getString("library_columns", "3")?.toIntOrNull() ?: 3
+    val libraryTransitionsEnabled: Boolean get() = sp.getBoolean("library_transitions_enabled", true)
+    val libraryTransitionStyle: String get() = sp.getString("library_transition_style", "fade") ?: "fade"
 
     var incognito: Boolean
         get() = sp.getBoolean("incognito", false)

@@ -13,12 +13,11 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.imperialreader.R
 import com.imperialreader.data.backup.BackupManager
+import com.imperialreader.data.backup.BackupRestoreWorker
 import com.imperialreader.data.storage.LocalScanner
 import com.imperialreader.data.update.AppUpdateManager
 import com.imperialreader.ui.details.MangaDetailsActivity
@@ -38,8 +37,6 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     private lateinit var queueSummary: TextView
     private lateinit var queuePauseAll: Button
     private lateinit var queueEmpty: TextView
-    private lateinit var queueRecycler: RecyclerView
-    private lateinit var queueAdapter: DownloadQueueAdapter
     private lateinit var appUpdateSub: TextView
     private var queueItems: List<com.imperialreader.data.download.DownloadQueueItem> = emptyList()
     private var pendingUpdateApk: File? = null
@@ -72,15 +69,11 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
 
     private val restoreBackup = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            viewLifecycleOwner.lifecycleScope.launch {
-                try {
-                    val n = BackupManager(requireContext()).restore(uri)
-                    requireContext().toast("Restored $n library entries")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    requireContext().toast("Restore failed: ${e.message}")
-                }
+            try {
+                BackupRestoreWorker.enqueue(requireContext(), uri)
+                requireContext().toast("Backup restore started. Progress is available in notifications.")
+            } catch (e: Exception) {
+                requireContext().toast("Could not start backup restore: ${e.message}")
             }
         }
     }
@@ -107,22 +100,14 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         queueSummary = view.findViewById(R.id.queueSummary)
         queuePauseAll = view.findViewById(R.id.queuePauseAll)
         queueEmpty = view.findViewById(R.id.queueEmpty)
-        queueRecycler = view.findViewById(R.id.downloadQueue)
-        queueAdapter = DownloadQueueAdapter(
-            onClick = { item ->
-                item.mangaId?.let { startActivity(MangaDetailsActivity.intent(requireContext(), it)) }
-            },
-            onActions = ::showDownloadActions,
-            onPauseAllForEntry = { mangaId, allPaused ->
-                if (allPaused) requireContext().app.downloads.resumeManga(mangaId)
-                else requireContext().app.downloads.pauseManga(mangaId)
-            }
-        )
-        queueRecycler.layoutManager = LinearLayoutManager(requireContext())
-        queueRecycler.adapter = queueAdapter
+        val openQueue = View.OnClickListener {
+            startActivity(Intent(requireContext(), DownloadQueueActivity::class.java))
+        }
+        queueSummary.setOnClickListener(openQueue)
+        queueEmpty.setOnClickListener(openQueue)
         queuePauseAll.setOnClickListener {
-            val chapters = queueItems.filter { it.chapterId != null }
-            if (chapters.isNotEmpty() && chapters.all { it.paused }) {
+            val actionable = queueItems.filter { it.chapterId != null && !it.failed }
+            if (actionable.isNotEmpty() && actionable.all { it.paused }) {
                 requireContext().app.downloads.resumeAll()
             } else {
                 requireContext().app.downloads.pauseAll()
@@ -133,22 +118,23 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 requireContext().app.downloads.queueItems.collect { items ->
                     queueItems = items
-                    val active = items.count { it.downloading && !it.paused }
-                    val paused = items.count { it.paused }
                     val chapters = items.filter { it.chapterId != null }
-                    val allPaused = chapters.isNotEmpty() && chapters.all { it.paused }
-                    queueSummary.text = when {
-                        items.isEmpty() -> "Nothing is queued"
-                        active == 0 && paused > 0 -> "$paused download(s) paused"
-                        active == 0 -> "${items.size} chapter(s) waiting"
-                        items.size == 1 -> "1 chapter downloading"
-                        else -> "$active downloading · ${items.size - active} queued"
-                    }
-                    queuePauseAll.visibility = if (chapters.isEmpty()) View.GONE else View.VISIBLE
-                    queuePauseAll.text = if (allPaused) "Resume all" else "Pause all"
+                    val actionable = chapters.filterNot { it.failed }
+                    val active = actionable.count { it.downloading && !it.paused }
+                    val paused = actionable.count { it.paused }
+                    val queued = actionable.count { !it.downloading && !it.paused }
+                    val failed = chapters.count { it.failed }
+                    val external = items.count { it.chapterId == null }
+                    queueSummary.text = listOfNotNull(
+                        active.takeIf { it > 0 }?.let { "$it downloading" },
+                        queued.takeIf { it > 0 }?.let { "$it queued" },
+                        paused.takeIf { it > 0 }?.let { "$it paused" },
+                        failed.takeIf { it > 0 }?.let { "$it failed" },
+                        external.takeIf { it > 0 }?.let { "$it other download(s)" }
+                    ).joinToString(" · ").ifBlank { "Nothing is queued" } + " · Tap to view queue"
+                    queuePauseAll.visibility = if (actionable.isEmpty()) View.GONE else View.VISIBLE
+                    queuePauseAll.text = if (actionable.isNotEmpty() && actionable.all { it.paused }) "Resume all" else "Pause all"
                     queueEmpty.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
-                    queueRecycler.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
-                    queueAdapter.submitQueue(items)
                 }
             }
         }
@@ -240,34 +226,6 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
         }
     }
 
-    private fun showDownloadActions(item: com.imperialreader.data.download.DownloadQueueItem) {
-        val mangaId = item.mangaId ?: return
-        val chapterId = item.chapterId ?: return
-        val actions = listOf(
-            if (item.paused) "Resume" else "Pause",
-            "Cancel chapter",
-            "Cancel all downloads from this entry"
-        )
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle(item.chapterName)
-            .setItems(actions.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> if (item.paused) requireContext().app.downloads.resumeChapter(chapterId)
-                    else requireContext().app.downloads.pauseChapter(chapterId)
-                    1 -> requireContext().app.downloads.cancelChapter(chapterId)
-                    2 -> MaterialAlertDialogBuilder(requireContext())
-                        .setTitle("Cancel all downloads from ${item.mangaTitle}?")
-                        .setMessage("All queued and active chapter downloads for this entry will be canceled.")
-                        .setNegativeButton("Keep downloads", null)
-                        .setPositiveButton("Cancel all") { _, _ ->
-                            requireContext().app.downloads.cancelAllForManga(mangaId)
-                        }
-                        .show()
-                }
-            }
-            .show()
-    }
-
     private fun refreshStorageText() {
         storageSub.text = requireContext().app.storage.displayPath()
         refreshAutomaticBackupText()
@@ -276,6 +234,9 @@ class MoreFragment : Fragment(R.layout.fragment_more) {
     override fun onResume() {
         super.onResume()
         if (::autoBackupSub.isInitialized) refreshAutomaticBackupText()
+        BackupRestoreWorker.consumeFallbackStatus(requireContext())?.let { status ->
+            requireContext().toast(status)
+        }
     }
 
     private fun refreshAutomaticBackupText() {
